@@ -383,10 +383,15 @@
   display: flex;
   align-items: flex-end;
   gap: 10px;
+  min-width: 0;
 }
 
 .hermes-sidebar-chat-row.is-user {
   flex-direction: row-reverse;
+}
+
+.hermes-sidebar-chat-row.has-attachments {
+  align-items: flex-start;
 }
 
 .hermes-sidebar-avatar {
@@ -424,10 +429,15 @@
 
 .hermes-sidebar-bubble {
   max-width: min(88%, 560px);
+  min-width: 0;
   border-radius: 16px;
   padding: 11px 13px;
   border: 1px solid var(--background-modifier-border);
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.04);
+}
+
+.hermes-sidebar-bubble.has-attachments {
+  max-width: min(72%, 340px);
 }
 
 .hermes-sidebar-bubble.is-ai.final {
@@ -460,7 +470,8 @@
   grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
   gap: 6px;
   margin-top: 8px;
-  max-width: 260px;
+  width: min(100%, 220px);
+  max-width: 100%;
 }
 
 .hermes-sidebar-message-image-button {
@@ -475,7 +486,7 @@
 
 .hermes-sidebar-message-image {
   width: 100%;
-  max-height: 150px;
+  max-height: 112px;
   border-radius: 10px;
   object-fit: cover;
   display: block;

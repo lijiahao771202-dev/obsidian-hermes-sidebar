@@ -1000,9 +1000,15 @@ class HermesSidebarView extends ItemView {
 		if (!this.messagesEl) {
 			return;
 		}
+		const hasAttachments = (message.attachments ?? []).length > 0;
 
 		const row = this.messagesEl.createDiv({
-			cls: `hermes-sidebar-chat-row ${message.role === "user" ? "is-user" : "is-assistant"} ${message.kind}`.trim()
+			cls: [
+				"hermes-sidebar-chat-row",
+				message.role === "user" ? "is-user" : "is-assistant",
+				message.kind,
+				hasAttachments ? "has-attachments" : ""
+			].filter(Boolean).join(" ")
 		});
 
 		const avatar = row.createDiv({
@@ -1019,7 +1025,12 @@ class HermesSidebarView extends ItemView {
 		}
 
 		const bubble = row.createDiv({
-			cls: `hermes-sidebar-bubble ${message.kind} ${message.role === "user" ? "is-user" : "is-ai"}`
+			cls: [
+				"hermes-sidebar-bubble",
+				message.kind,
+				message.role === "user" ? "is-user" : "is-ai",
+				hasAttachments ? "has-attachments" : ""
+			].filter(Boolean).join(" ")
 		});
 		const body = bubble.createDiv({
 			cls: "hermes-sidebar-message-body"
@@ -1285,6 +1296,13 @@ class HermesSidebarView extends ItemView {
 		}
 
 		this.activityEntries = this.activityEntries.slice(-20);
+	}
+
+	private getLatestVisibleActivityText(): string {
+		const entry = [...this.activityEntries]
+			.reverse()
+			.find((item) => item.toolName !== "run.config" && item.text.trim());
+		return entry?.text.trim() ?? "";
 	}
 
 	private pushLocalActivity(input: LocalActivityInput): void {
@@ -1733,8 +1751,10 @@ class HermesSidebarView extends ItemView {
 
 	private buildStatusText(): string {
 		const parts: string[] = [];
-		if (!shouldHideStatusText(this.statusText)) {
-			parts.push(this.statusText);
+		const visibleActivity = this.getLatestVisibleActivityText();
+		const primaryStatus = visibleActivity || this.statusText;
+		if (!shouldHideStatusText(primaryStatus)) {
+			parts.push(primaryStatus);
 		}
 		if (this.queuedTurns.length > 0) {
 			parts.push(`Queue ${this.queuedTurns.length}`);
