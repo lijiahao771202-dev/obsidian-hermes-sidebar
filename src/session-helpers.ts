@@ -1,4 +1,4 @@
-export const DEFAULT_SESSION_TITLE = "New chat";
+export const DEFAULT_SESSION_TITLE = "新对话";
 
 export interface SessionLike {
 	id: string;
@@ -126,6 +126,9 @@ export function shouldHideStatusText(statusText: string): boolean {
 		"Ready",
 		"Connected",
 		"Reply received",
-		"Started a fresh session"
+		"Started a fresh session",
+		"已连接",
+		"已收到回复",
+		"已开始新对话"
 	]).has(statusText);
 }

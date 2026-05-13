@@ -642,7 +642,7 @@ class HermesSidebarView extends ItemView {
 
 	attachContext(context: PendingContext): void {
 		this.pendingContexts.push(context);
-		this.statusText = `Attached ${context.label.toLowerCase()} context`;
+		this.statusText = `已附加 ${context.label.toLowerCase()} 上下文`;
 		this.render();
 		new Notice(`${context.label} attached to Hermes.`);
 	}
@@ -685,7 +685,7 @@ class HermesSidebarView extends ItemView {
 		const headerActions = header.createDiv({ cls: "hermes-sidebar-header-actions" });
 		const historyButton = headerActions.createEl("button", {
 			cls: "hermes-sidebar-button",
-			text: "History"
+			text: "历史"
 		});
 		historyButton.toggleClass("is-active", this.isHistoryOpen);
 		historyButton.addEventListener("click", () => {
@@ -694,7 +694,7 @@ class HermesSidebarView extends ItemView {
 		});
 		const resetButton = headerActions.createEl("button", {
 			cls: "hermes-sidebar-button",
-			text: "New chat"
+			text: "新对话"
 		});
 		resetButton.addEventListener("click", () => {
 			if (this.isSending) {
@@ -707,7 +707,7 @@ class HermesSidebarView extends ItemView {
 			this.activeStreamingMessageIndex = null;
 			this.plugin.clearSelectionSnapshot(true);
 			this.plugin.createSession();
-			this.statusText = "Started a fresh session";
+			this.statusText = "已开始新对话";
 			this.render();
 		});
 		root.toggleClass("hermes-sidebar-history-open", this.isHistoryOpen);
@@ -715,7 +715,7 @@ class HermesSidebarView extends ItemView {
 		const historyPanel = root.createDiv({ cls: "hermes-sidebar-history" });
 		historyPanel.createDiv({
 			cls: "hermes-sidebar-history-title",
-			text: "Recent chats"
+			text: "最近对话"
 		});
 		const historyList = historyPanel.createDiv({ cls: "hermes-sidebar-history-list" });
 		for (const session of this.plugin.getSessions()) {
@@ -742,12 +742,12 @@ class HermesSidebarView extends ItemView {
 				this.queuedTurns = [];
 				this.activeStreamingMessageIndex = null;
 				this.plugin.setActiveSession(session.id);
-				this.statusText = "Switched chat";
+				this.statusText = "已切换对话";
 				this.render();
 			});
 			const deleteButton = item.createEl("button", {
 				cls: "hermes-sidebar-history-delete",
-				text: "Delete"
+				text: "删除"
 			});
 			deleteButton.addEventListener("click", (event) => {
 				event.preventDefault();
@@ -757,7 +757,7 @@ class HermesSidebarView extends ItemView {
 					return;
 				}
 				this.plugin.deleteSession(session.id);
-				this.statusText = "Deleted chat";
+				this.statusText = "已删除对话";
 				this.render();
 			});
 		}
@@ -806,7 +806,7 @@ class HermesSidebarView extends ItemView {
 				});
 				const clearButton = selectionHeaderSide.createEl("button", {
 					cls: "hermes-sidebar-clear-selection",
-					text: "Clear"
+					text: "清除"
 				});
 				clearButton.addEventListener("click", (event) => {
 					event.preventDefault();
@@ -824,7 +824,7 @@ class HermesSidebarView extends ItemView {
 			const queueEl = root.createDiv({ cls: "hermes-sidebar-queue" });
 			queueEl.createDiv({
 				cls: "hermes-sidebar-queue-title",
-				text: `Queue · ${this.queuedTurns.length}`
+				text: `队列 · ${this.queuedTurns.length}`
 			});
 			const queueList = queueEl.createDiv({ cls: "hermes-sidebar-queue-list" });
 			for (const queued of this.queuedTurns) {
@@ -851,7 +851,7 @@ class HermesSidebarView extends ItemView {
 		if (activeSession.messages.length === 0) {
 			this.messagesEl.createDiv({
 				cls: "hermes-sidebar-empty-state",
-				text: "Start a chat."
+				text: "选择一段文字，或直接向 Hermes 提问。"
 			});
 		} else {
 			for (const message of activeSession.messages) {
@@ -892,7 +892,7 @@ class HermesSidebarView extends ItemView {
 		});
 		this.inputEl.value = this.draftText;
 		this.inputEl.placeholder =
-			"Ask Hermes about this note...";
+			"问问 Hermes：可以围绕当前笔记、选区或图片...";
 		this.inputEl.addEventListener("input", () => {
 			this.draftText = this.inputEl?.value ?? "";
 		});
@@ -966,7 +966,7 @@ class HermesSidebarView extends ItemView {
 
 		this.sendButtonEl = toolbar.createEl("button", {
 			cls: "hermes-sidebar-send",
-			text: this.isSending ? "Queue" : "Send"
+			text: this.isSending ? "排队" : "发送"
 		});
 		this.sendButtonEl.addEventListener("click", () => void this.handleSend());
 
@@ -1644,7 +1644,7 @@ class HermesSidebarView extends ItemView {
 							session.sessionId = event.sessionId;
 						}
 						this.finalizeActiveStream(event.text);
-						this.statusText = session.sessionId ? "Connected" : "Reply received";
+						this.statusText = session.sessionId ? "已连接" : "已收到回复";
 						this.render(false);
 						this.scrollMessagesToBottom();
 					}
@@ -1659,7 +1659,7 @@ class HermesSidebarView extends ItemView {
 			}
 			this.finalizeActiveStream(result.text);
 			this.persistActiveSession();
-			this.statusText = session.sessionId ? "Connected" : "Reply received";
+			this.statusText = session.sessionId ? "已连接" : "已收到回复";
 		} catch (error) {
 			if (isHermesAbortError(error)) {
 				this.convertActiveStreamToProgress();
@@ -1757,7 +1757,7 @@ class HermesSidebarView extends ItemView {
 			parts.push(primaryStatus);
 		}
 		if (this.queuedTurns.length > 0) {
-			parts.push(`Queue ${this.queuedTurns.length}`);
+			parts.push(`队列 ${this.queuedTurns.length}`);
 		}
 		if (this.isSending) {
 			parts.push("Esc 停止");

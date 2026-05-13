@@ -29,7 +29,7 @@ var import_node_os = require("node:os");
 var import_node_path = require("node:path");
 
 // src/session-helpers.ts
-var DEFAULT_SESSION_TITLE = "New chat";
+var DEFAULT_SESSION_TITLE = "\u65B0\u5BF9\u8BDD";
 function formatSelectionPreview(text, maxLength = 48) {
   const compact = text.replace(/\s+/g, " ").trim();
   if (!compact) {
@@ -101,7 +101,10 @@ function shouldHideStatusText(statusText) {
     "Ready",
     "Connected",
     "Reply received",
-    "Started a fresh session"
+    "Started a fresh session",
+    "\u5DF2\u8FDE\u63A5",
+    "\u5DF2\u6536\u5230\u56DE\u590D",
+    "\u5DF2\u5F00\u59CB\u65B0\u5BF9\u8BDD"
   ])).has(statusText);
 }
 
@@ -521,7 +524,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
   }
   attachContext(context) {
     this.pendingContexts.push(context);
-    this.statusText = `Attached ${context.label.toLowerCase()} context`;
+    this.statusText = `\u5DF2\u9644\u52A0 ${context.label.toLowerCase()} \u4E0A\u4E0B\u6587`;
     this.render();
     new import_obsidian.Notice(`${context.label} attached to Hermes.`);
   }
@@ -558,7 +561,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     const headerActions = header.createDiv({ cls: "hermes-sidebar-header-actions" });
     const historyButton = headerActions.createEl("button", {
       cls: "hermes-sidebar-button",
-      text: "History"
+      text: "\u5386\u53F2"
     });
     historyButton.toggleClass("is-active", this.isHistoryOpen);
     historyButton.addEventListener("click", () => {
@@ -567,7 +570,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     });
     const resetButton = headerActions.createEl("button", {
       cls: "hermes-sidebar-button",
-      text: "New chat"
+      text: "\u65B0\u5BF9\u8BDD"
     });
     resetButton.addEventListener("click", () => {
       if (this.isSending) {
@@ -580,14 +583,14 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       this.activeStreamingMessageIndex = null;
       this.plugin.clearSelectionSnapshot(true);
       this.plugin.createSession();
-      this.statusText = "Started a fresh session";
+      this.statusText = "\u5DF2\u5F00\u59CB\u65B0\u5BF9\u8BDD";
       this.render();
     });
     root.toggleClass("hermes-sidebar-history-open", this.isHistoryOpen);
     const historyPanel = root.createDiv({ cls: "hermes-sidebar-history" });
     historyPanel.createDiv({
       cls: "hermes-sidebar-history-title",
-      text: "Recent chats"
+      text: "\u6700\u8FD1\u5BF9\u8BDD"
     });
     const historyList = historyPanel.createDiv({ cls: "hermes-sidebar-history-list" });
     for (const session of this.plugin.getSessions()) {
@@ -614,12 +617,12 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         this.queuedTurns = [];
         this.activeStreamingMessageIndex = null;
         this.plugin.setActiveSession(session.id);
-        this.statusText = "Switched chat";
+        this.statusText = "\u5DF2\u5207\u6362\u5BF9\u8BDD";
         this.render();
       });
       const deleteButton = item.createEl("button", {
         cls: "hermes-sidebar-history-delete",
-        text: "Delete"
+        text: "\u5220\u9664"
       });
       deleteButton.addEventListener("click", (event) => {
         event.preventDefault();
@@ -629,7 +632,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
           return;
         }
         this.plugin.deleteSession(session.id);
-        this.statusText = "Deleted chat";
+        this.statusText = "\u5DF2\u5220\u9664\u5BF9\u8BDD";
         this.render();
       });
     }
@@ -676,7 +679,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         });
         const clearButton = selectionHeaderSide.createEl("button", {
           cls: "hermes-sidebar-clear-selection",
-          text: "Clear"
+          text: "\u6E05\u9664"
         });
         clearButton.addEventListener("click", (event) => {
           event.preventDefault();
@@ -693,7 +696,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       const queueEl = root.createDiv({ cls: "hermes-sidebar-queue" });
       queueEl.createDiv({
         cls: "hermes-sidebar-queue-title",
-        text: `Queue \xB7 ${this.queuedTurns.length}`
+        text: `\u961F\u5217 \xB7 ${this.queuedTurns.length}`
       });
       const queueList = queueEl.createDiv({ cls: "hermes-sidebar-queue-list" });
       for (const queued of this.queuedTurns) {
@@ -717,7 +720,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     if (activeSession.messages.length === 0) {
       this.messagesEl.createDiv({
         cls: "hermes-sidebar-empty-state",
-        text: "Start a chat."
+        text: "\u9009\u62E9\u4E00\u6BB5\u6587\u5B57\uFF0C\u6216\u76F4\u63A5\u5411 Hermes \u63D0\u95EE\u3002"
       });
     } else {
       for (const message of activeSession.messages) {
@@ -756,7 +759,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       cls: "hermes-sidebar-input"
     });
     this.inputEl.value = this.draftText;
-    this.inputEl.placeholder = "Ask Hermes about this note...";
+    this.inputEl.placeholder = "\u95EE\u95EE Hermes\uFF1A\u53EF\u4EE5\u56F4\u7ED5\u5F53\u524D\u7B14\u8BB0\u3001\u9009\u533A\u6216\u56FE\u7247...";
     this.inputEl.addEventListener("input", () => {
       this.draftText = this.inputEl?.value ?? "";
     });
@@ -825,7 +828,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     });
     this.sendButtonEl = toolbar.createEl("button", {
       cls: "hermes-sidebar-send",
-      text: this.isSending ? "Queue" : "Send"
+      text: this.isSending ? "\u6392\u961F" : "\u53D1\u9001"
     });
     this.sendButtonEl.addEventListener("click", () => void this.handleSend());
     this.inputEl.addEventListener("keydown", (event) => {
@@ -1407,7 +1410,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
               session.sessionId = event.sessionId;
             }
             this.finalizeActiveStream(event.text);
-            this.statusText = session.sessionId ? "Connected" : "Reply received";
+            this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
             this.render(false);
             this.scrollMessagesToBottom();
           }
@@ -1420,7 +1423,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       }
       this.finalizeActiveStream(result.text);
       this.persistActiveSession();
-      this.statusText = session.sessionId ? "Connected" : "Reply received";
+      this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
     } catch (error) {
       if (isHermesAbortError(error)) {
         this.convertActiveStreamToProgress();
@@ -1507,7 +1510,7 @@ ${context.content}`).join("\n\n");
       parts.push(primaryStatus);
     }
     if (this.queuedTurns.length > 0) {
-      parts.push(`Queue ${this.queuedTurns.length}`);
+      parts.push(`\u961F\u5217 ${this.queuedTurns.length}`);
     }
     if (this.isSending) {
       parts.push("Esc \u505C\u6B62");
