@@ -170,6 +170,13 @@ interface HermesActivityEntry {
 	createdAt: number;
 }
 
+interface LocalActivityInput {
+	text: string;
+	preview?: string;
+	status?: "running" | "done" | "error" | "info";
+	toolName?: string;
+}
+
 interface ActiveViewScrollSnapshot {
 	editorLeft?: number;
 	editorTop?: number;
@@ -1235,6 +1242,20 @@ class HermesSidebarView extends ItemView {
 
 		const toolName = event.toolName?.trim() || undefined;
 		const preview = event.preview?.trim() || undefined;
+		const existingInfoIndex = event.eventType === "run.config"
+			? this.activityEntries.findIndex((entry) => entry.toolName === "run.config")
+			: -1;
+		if (existingInfoIndex >= 0) {
+			this.activityEntries[existingInfoIndex] = {
+				...this.activityEntries[existingInfoIndex],
+				text,
+				preview,
+				status: "info",
+				createdAt: Date.now()
+			};
+			return;
+		}
+
 		const existingIndex = toolName
 			? this.activityEntries.findIndex((entry) =>
 				entry.toolName === toolName &&
@@ -1266,19 +1287,87 @@ class HermesSidebarView extends ItemView {
 		this.activityEntries = this.activityEntries.slice(-20);
 	}
 
+	private pushLocalActivity(input: LocalActivityInput): void {
+		const text = input.text.trim();
+		if (!text) {
+			return;
+		}
+
+		const entry: HermesActivityEntry = {
+			id: `activity-${Date.now()}-${++this.activityCounter}`,
+			text,
+			toolName: input.toolName,
+			preview: input.preview?.trim() || undefined,
+			status: input.status ?? "info",
+			createdAt: Date.now()
+		};
+		this.activityEntries.push(entry);
+		this.activityEntries = this.activityEntries.slice(-20);
+		this.statusText = text;
+	}
+
+	private seedTurnActivities(turn: QueuedTurn): void {
+		this.pushLocalActivity({
+			text: `本轮使用：${this.getModelLabel(turn.model)} · 思考 ${this.getReasoningLabel(turn.reasoningEffort)}`,
+			preview: `provider=${turn.provider}, model=${turn.model}, reasoning=${turn.reasoningEffort}`,
+			toolName: "run.config"
+		});
+
+		if (turn.liveContext.noteTitle || turn.liveContext.notePath) {
+			this.pushLocalActivity({
+				text: `正在读取当前笔记：${formatSelectionPreview(turn.liveContext.noteTitle || turn.liveContext.notePath || "", 40)}`,
+				preview: turn.liveContext.notePath
+			});
+		}
+
+		if (turn.liveContext.selectionText) {
+			this.pushLocalActivity({
+				text: `正在分析选中文本：${summarizeSelectionLength(turn.liveContext.selectionText)}`,
+				preview: formatSelectionPreview(turn.liveContext.selectionText, 96)
+			});
+		}
+
+		for (const context of turn.contexts) {
+			this.pushLocalActivity({
+				text: `已附加上下文：${formatSelectionPreview(context.label, 40)}`,
+				preview: formatSelectionPreview(context.content, 96)
+			});
+		}
+
+		if (turn.images.length > 0) {
+			this.pushLocalActivity({
+				text: `正在识别图片：${turn.images.length} 张`,
+				preview: turn.images.map((image) => image.name).join(", ")
+			});
+		}
+	}
+
+	private setFallbackStatus(text: string): void {
+		if (!this.statusText || !this.activityEntries.length) {
+			this.statusText = text;
+		}
+	}
+
 	private formatActivityText(event: HermesBridgeEvent): string {
 		if (event.status === "info") {
 			return event.text?.trim() || event.message?.trim() || "";
 		}
 		const toolName = event.toolName?.trim() || "";
+		const preview = event.preview?.trim() || "";
 		if (event.status === "running") {
-			return toolName ? formatToolStatusText(toolName, "running") : "正在调用工具";
+			return toolName
+				? joinActivityText(formatToolStatusText(toolName, "running"), preview)
+				: joinActivityText("正在调用工具", preview);
 		}
 		if (event.status === "done") {
-			return toolName ? formatToolStatusText(toolName, "done") : "工具处理完了";
+			return toolName
+				? joinActivityText(formatToolStatusText(toolName, "done"), preview)
+				: joinActivityText("工具处理完了", preview);
 		}
 		if (event.status === "error" || event.isError) {
-			return toolName ? formatToolStatusText(toolName, "error") : "工具调用失败";
+			return toolName
+				? joinActivityText(formatToolStatusText(toolName, "error"), preview)
+				: joinActivityText("工具调用失败", preview);
 		}
 		return event.text?.trim() || event.message?.trim() || "";
 	}
@@ -1465,7 +1554,9 @@ class HermesSidebarView extends ItemView {
 		this.isSending = true;
 		this.activityEntries = [];
 		this.isActivityOpen = false;
-		this.statusText = "Hermes 已收到这条消息";
+		this.statusText = "";
+		this.seedTurnActivities(turn);
+		this.setFallbackStatus("Hermes 已收到这条消息");
 		this.render(false);
 		this.scrollMessagesToBottom();
 
@@ -1485,7 +1576,9 @@ class HermesSidebarView extends ItemView {
 				pathPrefix: this.plugin.settings.pathPrefix,
 				onEvent: (event) => {
 						if (event.type === "status") {
-							this.statusText = event.text || this.statusText;
+							if (this.activityEntries.length === 0 || isDetailedStatusText(event.text || "")) {
+								this.statusText = event.text || this.statusText;
+							}
 							this.render(false);
 							return;
 						}
@@ -1493,17 +1586,17 @@ class HermesSidebarView extends ItemView {
 						if (event.type === "activity") {
 							this.pushActivityEntry(event);
 							const activityText = this.formatActivityText(event);
-							if (activityText) {
+							if (activityText && event.eventType !== "run.config") {
 								this.statusText = activityText;
 							}
 							this.render(false);
 							return;
 						}
 
-						if (event.type === "progress") {
+					if (event.type === "progress") {
 						if (event.text) {
 							this.pushProgressBubble(event.text);
-							this.statusText = "Hermes 正在继续处理";
+							this.statusText = `正在处理：${formatSelectionPreview(event.text, 72)}`;
 							this.render(false);
 							this.scrollMessagesToBottom();
 						}
@@ -1514,7 +1607,7 @@ class HermesSidebarView extends ItemView {
 						const target = this.ensureStreamingFinalMessage();
 						target.content += event.text || "";
 						target.pending = true;
-						this.statusText = "Hermes 正在写回复";
+						this.statusText = `正在写回复：已输出 ${target.content.length} chars`;
 						this.render(false);
 						this.scrollMessagesToBottom();
 						return;
@@ -1522,7 +1615,7 @@ class HermesSidebarView extends ItemView {
 
 					if (event.type === "segment_break") {
 						this.convertActiveStreamToProgress();
-						this.statusText = "Hermes 正在继续处理";
+						this.setFallbackStatus("Hermes 正在继续处理");
 						this.render(false);
 						this.scrollMessagesToBottom();
 						return;
@@ -2150,6 +2243,29 @@ function summarizeSelectionLength(text: string): string {
 		return "0 chars";
 	}
 	return `${compact.length} chars`;
+}
+
+function joinActivityText(label: string, preview: string, maxLength = 72): string {
+	const compactPreview = preview.replace(/\s+/g, " ").trim();
+	if (!compactPreview) {
+		return label;
+	}
+	return `${label}：${formatSelectionPreview(compactPreview, maxLength)}`;
+}
+
+function isDetailedStatusText(text: string): boolean {
+	const value = text.trim();
+	if (!value) {
+		return false;
+	}
+	return !new Set([
+		"Hermes 已收到这条消息",
+		"正在思考中",
+		"正在调用工具中",
+		"Hermes 正在处理",
+		"Hermes 正在继续处理",
+		"Hermes 正在写回复"
+	]).has(value);
 }
 
 function formatToolDisplayName(toolName: string): string {

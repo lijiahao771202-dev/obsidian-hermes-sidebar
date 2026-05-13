@@ -4,7 +4,13 @@ import tempfile
 import types
 import unittest
 
-from hermes_bridge import format_tool_status, pick_bridge_final_text, preprocess_bridge_images
+from hermes_bridge import (
+    compact_preview,
+    format_tool_status,
+    pick_bridge_final_text,
+    preprocess_bridge_images,
+    summarize_tool_args,
+)
 
 
 class HermesBridgeHelpersTest(unittest.TestCase):
@@ -14,6 +20,20 @@ class HermesBridgeHelpersTest(unittest.TestCase):
         self.assertEqual(format_tool_status("vision_analyze", "running"), "正在调用 vision_analyze")
         self.assertEqual(format_tool_status("vision_analyze", "done"), "已完成 vision_analyze")
         self.assertEqual(format_tool_status("vision_analyze", "error"), "vision_analyze 调用失败")
+
+    def test_summarize_tool_args_prefers_specific_context(self):
+        self.assertEqual(
+            summarize_tool_args("skill_view", {"name": "obsidian-cli"}, ""),
+            "skill=obsidian-cli",
+        )
+        self.assertEqual(
+            summarize_tool_args("obsidian_search", {"query": "wiki 双链", "path": "notes"}, ""),
+            "query=wiki 双链",
+        )
+        self.assertEqual(
+            compact_preview("第一行\n\n第二行   第三行", max_length=20),
+            "第一行 第二行 第三行",
+        )
 
     def test_pick_bridge_final_text_prefers_final_then_stream_then_previews(self):
         self.assertEqual(

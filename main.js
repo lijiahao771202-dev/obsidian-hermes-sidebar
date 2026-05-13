@@ -1062,6 +1062,17 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     }
     const toolName = event.toolName?.trim() || void 0;
     const preview = event.preview?.trim() || void 0;
+    const existingInfoIndex = event.eventType === "run.config" ? this.activityEntries.findIndex((entry2) => entry2.toolName === "run.config") : -1;
+    if (existingInfoIndex >= 0) {
+      this.activityEntries[existingInfoIndex] = {
+        ...this.activityEntries[existingInfoIndex],
+        text,
+        preview,
+        status: "info",
+        createdAt: Date.now()
+      };
+      return;
+    }
     const existingIndex = toolName ? this.activityEntries.findIndex(
       (entry2) => entry2.toolName === toolName && entry2.preview === preview && entry2.status === "running"
     ) : -1;
@@ -1086,19 +1097,73 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     }
     this.activityEntries = this.activityEntries.slice(-20);
   }
+  pushLocalActivity(input) {
+    const text = input.text.trim();
+    if (!text) {
+      return;
+    }
+    const entry = {
+      id: `activity-${Date.now()}-${++this.activityCounter}`,
+      text,
+      toolName: input.toolName,
+      preview: input.preview?.trim() || void 0,
+      status: input.status ?? "info",
+      createdAt: Date.now()
+    };
+    this.activityEntries.push(entry);
+    this.activityEntries = this.activityEntries.slice(-20);
+    this.statusText = text;
+  }
+  seedTurnActivities(turn) {
+    this.pushLocalActivity({
+      text: `\u672C\u8F6E\u4F7F\u7528\uFF1A${this.getModelLabel(turn.model)} \xB7 \u601D\u8003 ${this.getReasoningLabel(turn.reasoningEffort)}`,
+      preview: `provider=${turn.provider}, model=${turn.model}, reasoning=${turn.reasoningEffort}`,
+      toolName: "run.config"
+    });
+    if (turn.liveContext.noteTitle || turn.liveContext.notePath) {
+      this.pushLocalActivity({
+        text: `\u6B63\u5728\u8BFB\u53D6\u5F53\u524D\u7B14\u8BB0\uFF1A${formatSelectionPreview(turn.liveContext.noteTitle || turn.liveContext.notePath || "", 40)}`,
+        preview: turn.liveContext.notePath
+      });
+    }
+    if (turn.liveContext.selectionText) {
+      this.pushLocalActivity({
+        text: `\u6B63\u5728\u5206\u6790\u9009\u4E2D\u6587\u672C\uFF1A${summarizeSelectionLength(turn.liveContext.selectionText)}`,
+        preview: formatSelectionPreview(turn.liveContext.selectionText, 96)
+      });
+    }
+    for (const context of turn.contexts) {
+      this.pushLocalActivity({
+        text: `\u5DF2\u9644\u52A0\u4E0A\u4E0B\u6587\uFF1A${formatSelectionPreview(context.label, 40)}`,
+        preview: formatSelectionPreview(context.content, 96)
+      });
+    }
+    if (turn.images.length > 0) {
+      this.pushLocalActivity({
+        text: `\u6B63\u5728\u8BC6\u522B\u56FE\u7247\uFF1A${turn.images.length} \u5F20`,
+        preview: turn.images.map((image) => image.name).join(", ")
+      });
+    }
+  }
+  setFallbackStatus(text) {
+    if (!this.statusText || !this.activityEntries.length) {
+      this.statusText = text;
+    }
+  }
   formatActivityText(event) {
     if (event.status === "info") {
       return event.text?.trim() || event.message?.trim() || "";
     }
     const toolName = event.toolName?.trim() || "";
+    const preview = event.preview?.trim() || "";
     if (event.status === "running") {
-      return toolName ? formatToolStatusText(toolName, "running") : "\u6B63\u5728\u8C03\u7528\u5DE5\u5177";
+      return toolName ? joinActivityText(formatToolStatusText(toolName, "running"), preview) : joinActivityText("\u6B63\u5728\u8C03\u7528\u5DE5\u5177", preview);
     }
     if (event.status === "done") {
-      return toolName ? formatToolStatusText(toolName, "done") : "\u5DE5\u5177\u5904\u7406\u5B8C\u4E86";
+      return toolName ? joinActivityText(formatToolStatusText(toolName, "done"), preview) : joinActivityText("\u5DE5\u5177\u5904\u7406\u5B8C\u4E86", preview);
     }
     if (event.status === "error" || event.isError) {
-      return toolName ? formatToolStatusText(toolName, "error") : "\u5DE5\u5177\u8C03\u7528\u5931\u8D25";
+      return toolName ? joinActivityText(formatToolStatusText(toolName, "error"), preview) : joinActivityText("\u5DE5\u5177\u8C03\u7528\u5931\u8D25", preview);
     }
     return event.text?.trim() || event.message?.trim() || "";
   }
@@ -1261,7 +1326,9 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     this.isSending = true;
     this.activityEntries = [];
     this.isActivityOpen = false;
-    this.statusText = "Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F";
+    this.statusText = "";
+    this.seedTurnActivities(turn);
+    this.setFallbackStatus("Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F");
     this.render(false);
     this.scrollMessagesToBottom();
     try {
@@ -1280,14 +1347,16 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         pathPrefix: this.plugin.settings.pathPrefix,
         onEvent: (event) => {
           if (event.type === "status") {
-            this.statusText = event.text || this.statusText;
+            if (this.activityEntries.length === 0 || isDetailedStatusText(event.text || "")) {
+              this.statusText = event.text || this.statusText;
+            }
             this.render(false);
             return;
           }
           if (event.type === "activity") {
             this.pushActivityEntry(event);
             const activityText = this.formatActivityText(event);
-            if (activityText) {
+            if (activityText && event.eventType !== "run.config") {
               this.statusText = activityText;
             }
             this.render(false);
@@ -1296,7 +1365,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
           if (event.type === "progress") {
             if (event.text) {
               this.pushProgressBubble(event.text);
-              this.statusText = "Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406";
+              this.statusText = `\u6B63\u5728\u5904\u7406\uFF1A${formatSelectionPreview(event.text, 72)}`;
               this.render(false);
               this.scrollMessagesToBottom();
             }
@@ -1306,14 +1375,14 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
             const target = this.ensureStreamingFinalMessage();
             target.content += event.text || "";
             target.pending = true;
-            this.statusText = "Hermes \u6B63\u5728\u5199\u56DE\u590D";
+            this.statusText = `\u6B63\u5728\u5199\u56DE\u590D\uFF1A\u5DF2\u8F93\u51FA ${target.content.length} chars`;
             this.render(false);
             this.scrollMessagesToBottom();
             return;
           }
           if (event.type === "segment_break") {
             this.convertActiveStreamToProgress();
-            this.statusText = "Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406";
+            this.setFallbackStatus("Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406");
             this.render(false);
             this.scrollMessagesToBottom();
             return;
@@ -1798,6 +1867,27 @@ function summarizeSelectionLength(text) {
     return "0 chars";
   }
   return `${compact.length} chars`;
+}
+function joinActivityText(label, preview, maxLength = 72) {
+  const compactPreview = preview.replace(/\s+/g, " ").trim();
+  if (!compactPreview) {
+    return label;
+  }
+  return `${label}\uFF1A${formatSelectionPreview(compactPreview, maxLength)}`;
+}
+function isDetailedStatusText(text) {
+  const value = text.trim();
+  if (!value) {
+    return false;
+  }
+  return !(/* @__PURE__ */ new Set([
+    "Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F",
+    "\u6B63\u5728\u601D\u8003\u4E2D",
+    "\u6B63\u5728\u8C03\u7528\u5DE5\u5177\u4E2D",
+    "Hermes \u6B63\u5728\u5904\u7406",
+    "Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406",
+    "Hermes \u6B63\u5728\u5199\u56DE\u590D"
+  ])).has(value);
 }
 function formatToolStatusText(toolName, status) {
   if (toolName === "skill_view") {

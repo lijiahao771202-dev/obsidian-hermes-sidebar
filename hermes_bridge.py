@@ -77,6 +77,41 @@ def format_tool_status(tool_name: str, status: str) -> str:
     return label
 
 
+def compact_preview(value: Any, *, max_length: int = 96) -> str:
+    text = str(value or "")
+    text = " ".join(text.split())
+    if len(text) <= max_length:
+        return text
+    return text[: max(0, max_length - 3)].rstrip() + "..."
+
+
+def summarize_tool_args(tool_name: str, args: Any, preview: str) -> str:
+    preview_text = compact_preview(preview)
+    if preview_text:
+        return preview_text
+    if not isinstance(args, dict):
+        return compact_preview(args)
+
+    if tool_name in {"skill_view", "skill_manage"}:
+        skill_name = args.get("name") or args.get("skill") or args.get("skill_name")
+        if skill_name:
+            return f"skill={compact_preview(skill_name, max_length=72)}"
+
+    if tool_name == "skills_list":
+        query = args.get("query") or args.get("filter")
+        return f"filter={compact_preview(query, max_length=72)}" if query else "读取可用 skills"
+
+    for key in ("query", "path", "file", "name", "command", "url", "image_url", "prompt"):
+        value = args.get(key)
+        if value:
+            return f"{key}={compact_preview(value)}"
+
+    try:
+        return compact_preview(json.dumps(args, ensure_ascii=False), max_length=120)
+    except Exception:
+        return compact_preview(args)
+
+
 def emit_activity(
     *,
     event_type: str,
@@ -86,11 +121,12 @@ def emit_activity(
     duration: float | None = None,
     is_error: bool | None = None,
 ) -> None:
+    preview_text = compact_preview(preview, max_length=140)
     payload: dict[str, Any] = {
         "type": "activity",
         "eventType": event_type,
         "toolName": tool_name,
-        "preview": preview,
+        "preview": preview_text,
         "status": status,
         "text": format_tool_status(tool_name, status),
     }
@@ -326,7 +362,7 @@ def main() -> int:
         args: Any,
         **metadata: Any,
     ) -> None:
-        preview_text = str(preview or "").strip()
+        preview_text = summarize_tool_args(str(tool_name or ""), args, preview)
         if event_type == "reasoning.available" and preview_text:
             reasoning_previews.append(preview_text)
         if event_type == "tool.started":
