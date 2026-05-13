@@ -69,6 +69,12 @@ function shouldStickToBottom(input) {
   const threshold = input.threshold ?? 24;
   return input.scrollTop + input.clientHeight >= input.scrollHeight - threshold;
 }
+function getNextStickToBottom(input) {
+  if (input.isSending && input.currentlySticking) {
+    return true;
+  }
+  return shouldStickToBottom(input);
+}
 function getRestoredScrollTop(previousScrollTop, shouldAutoStickToBottom) {
   if (shouldAutoStickToBottom || previousScrollTop === null) {
     return void 0;
@@ -129,9 +135,9 @@ var DEFAULT_HERMES_ROOT = "/Users/lijiahao/.hermes/hermes-agent";
 var DEFAULT_HERMES_BRIDGE = "hermes_bridge.py";
 var DEFAULT_REASONING_EFFORT = "high";
 var HERMES_MODEL_OPTIONS = [
-  { label: "MiMo 2.5", value: "mimo-v2.5", provider: "xiaomi" },
-  { label: "DeepSeek V4 Flash", value: "deepseek-v4-flash", provider: "deepseek" },
-  { label: "DeepSeek V4 Pro", value: "deepseek-v4-pro", provider: "deepseek" }
+  { label: "MiMo 2.5", shortLabel: "MiMo", value: "mimo-v2.5", provider: "xiaomi" },
+  { label: "DeepSeek V4 Flash", shortLabel: "DS Flash", value: "deepseek-v4-flash", provider: "deepseek" },
+  { label: "DeepSeek V4 Pro", shortLabel: "DS Pro", value: "deepseek-v4-pro", provider: "deepseek" }
 ];
 var HERMES_REASONING_OPTIONS = [
   { label: "\u5173\u95ED", value: "none" },
@@ -479,6 +485,8 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     this.queueCounter = 0;
     this.isHistoryOpen = false;
     this.shouldAutoStickToBottom = true;
+    this.pendingBottomScrollFrame = null;
+    this.suppressNextMessagesScroll = false;
     this.plugin = plugin;
   }
   getViewType() {
@@ -727,6 +735,18 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     if (restoredScrollTop !== void 0) {
       this.messagesEl.scrollTop = restoredScrollTop;
     }
+    this.messagesEl.addEventListener("scroll", () => {
+      if (this.suppressNextMessagesScroll) {
+        this.suppressNextMessagesScroll = false;
+        return;
+      }
+      this.shouldAutoStickToBottom = shouldStickToBottom({
+        scrollTop: this.messagesEl?.scrollTop ?? 0,
+        clientHeight: this.messagesEl?.clientHeight ?? 0,
+        scrollHeight: this.messagesEl?.scrollHeight ?? 0
+      });
+    });
+    this.scheduleMessagesToBottom();
     const composer = root.createDiv({ cls: "hermes-sidebar-composer" });
     const preserveFocus = shouldRestoreComposerFocus(
       !allowInputReset && !!this.inputEl && document.activeElement === this.inputEl,
@@ -773,7 +793,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     for (const option of HERMES_MODEL_OPTIONS) {
       this.modelSelectEl.createEl("option", {
         value: option.value,
-        text: option.label
+        text: option.shortLabel
       });
     }
     this.modelSelectEl.value = this.plugin.settings.model;
@@ -856,10 +876,31 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       cls: "hermes-sidebar-message-body"
     });
     void this.renderMarkdownInto(body, message.content);
+    this.renderMessageAttachments(bubble, message);
+  }
+  renderMessageAttachments(container, message) {
+    const images = (message.attachments ?? []).filter((attachment) => attachment.type === "image");
+    if (images.length === 0) {
+      return;
+    }
+    const gallery = container.createDiv({ cls: "hermes-sidebar-message-images" });
+    for (const image of images) {
+      const preview = gallery.createEl("button", {
+        cls: "hermes-sidebar-message-image-button",
+        attr: { type: "button", "aria-label": `\u67E5\u770B\u56FE\u7247 ${image.name || ""}`.trim() }
+      });
+      const thumb = preview.createEl("img", { cls: "hermes-sidebar-message-image" });
+      thumb.src = image.previewDataUrl;
+      thumb.alt = image.name || "Attached image";
+      thumb.title = image.name || "Attached image";
+      thumb.addEventListener("load", () => this.scheduleMessagesToBottom());
+      preview.addEventListener("click", () => new HermesImagePreviewModal(this.app, image).open());
+    }
   }
   async renderMarkdownInto(container, content) {
     container.empty();
     await import_obsidian.MarkdownRenderer.render(this.app, content, container, "", this);
+    this.scheduleMessagesToBottom();
   }
   getHermesAvatarSrc() {
     if (this.hermesAvatarDataUrl) {
@@ -1085,11 +1126,20 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     const session = this.plugin.getActiveSession();
     const prompt = this.composePrompt(turn.userText, turn.contexts, turn.liveContext);
     const conversationHistory = this.getConversationHistory();
-    session.messages.push({
+    const imageAttachments = turn.images.map((image) => ({
+      type: "image",
+      name: image.name,
+      previewDataUrl: image.previewDataUrl
+    }));
+    const userMessage = {
       role: "user",
       kind: "user",
       content: turn.userText
-    });
+    };
+    if (imageAttachments.length > 0) {
+      userMessage.attachments = imageAttachments;
+    }
+    session.messages.push(userMessage);
     if (!session.title || session.title === DEFAULT_SESSION_TITLE) {
       session.title = buildSessionTitle(turn.userText);
     }
@@ -1264,18 +1314,61 @@ ${context.content}`).join("\n\n");
     if (!this.messagesEl || !this.shouldAutoStickToBottom) {
       return;
     }
+    this.suppressNextMessagesScroll = true;
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+  }
+  scheduleMessagesToBottom() {
+    if (!this.messagesEl || !this.shouldAutoStickToBottom) {
+      return;
+    }
+    if (this.pendingBottomScrollFrame !== null) {
+      window.cancelAnimationFrame(this.pendingBottomScrollFrame);
+    }
+    this.pendingBottomScrollFrame = window.requestAnimationFrame(() => {
+      this.pendingBottomScrollFrame = null;
+      this.scrollMessagesToBottom();
+      window.requestAnimationFrame(() => this.scrollMessagesToBottom());
+    });
   }
   captureScrollIntent() {
     if (!this.messagesEl) {
       this.shouldAutoStickToBottom = true;
       return;
     }
-    this.shouldAutoStickToBottom = shouldStickToBottom({
+    this.shouldAutoStickToBottom = getNextStickToBottom({
       scrollTop: this.messagesEl.scrollTop,
       clientHeight: this.messagesEl.clientHeight,
-      scrollHeight: this.messagesEl.scrollHeight
+      scrollHeight: this.messagesEl.scrollHeight,
+      isSending: this.isSending,
+      currentlySticking: this.shouldAutoStickToBottom
     });
+  }
+};
+var HermesImagePreviewModal = class extends import_obsidian.Modal {
+  constructor(app, attachment) {
+    super(app);
+    this.attachment = attachment;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("hermes-sidebar-image-preview-modal");
+    contentEl.createEl("img", {
+      cls: "hermes-sidebar-image-preview-full",
+      attr: {
+        src: this.attachment.previewDataUrl,
+        alt: this.attachment.name || "Attached image"
+      }
+    });
+    if (this.attachment.name) {
+      contentEl.createDiv({
+        cls: "hermes-sidebar-image-preview-caption",
+        text: this.attachment.name
+      });
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 };
 var HermesSidebarSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -1509,7 +1602,17 @@ function isHermesAbortError(error) {
   return error instanceof Error && error.message === "__HERMES_ABORTED__";
 }
 function cloneMessages(messages) {
-  return messages.map((message) => ({ ...message }));
+  return messages.map((message) => ({
+    ...message,
+    attachments: cloneMessageAttachments(message.attachments)
+  }));
+}
+function cloneMessageAttachments(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return void 0;
+  }
+  const cloned = attachments.filter(isHermesMessageAttachment).map((attachment) => ({ ...attachment }));
+  return cloned.length > 0 ? cloned : void 0;
 }
 function createChatSession(seed) {
   const now = Date.now();
@@ -1557,7 +1660,13 @@ function isHermesMessage(value) {
   if (!isPlainObject(value)) {
     return false;
   }
+  if ("attachments" in value && value.attachments !== void 0 && !Array.isArray(value.attachments)) {
+    return false;
+  }
   return (value.role === "user" || value.role === "assistant" || value.role === "system") && (value.kind === "user" || value.kind === "progress" || value.kind === "final") && typeof value.content === "string";
+}
+function isHermesMessageAttachment(value) {
+  return isPlainObject(value) && value.type === "image" && typeof value.name === "string" && typeof value.previewDataUrl === "string";
 }
 function summarizeSelectionLength(text) {
   const compact = text.replace(/\s+/g, " ").trim();

@@ -8,6 +8,7 @@ import {
 	formatSelectionPreview,
 	shouldHideStatusText,
 	shouldRestoreComposerFocus,
+	getNextStickToBottom,
 	getRestoredScrollTop,
 	pickNextActiveSessionId,
 	pickSelectionText,
@@ -85,6 +86,41 @@ test("shouldStickToBottom only returns true when the user is near the bottom", (
 			scrollTop: 520,
 			clientHeight: 200,
 			scrollHeight: 1000
+		}),
+		false
+	);
+});
+
+test("getNextStickToBottom keeps following streamed replies until the user scrolls away", () => {
+	assert.equal(
+		getNextStickToBottom({
+			scrollTop: 240,
+			clientHeight: 300,
+			scrollHeight: 900,
+			isSending: true,
+			currentlySticking: true
+		}),
+		true
+	);
+
+	assert.equal(
+		getNextStickToBottom({
+			scrollTop: 240,
+			clientHeight: 300,
+			scrollHeight: 900,
+			isSending: true,
+			currentlySticking: false
+		}),
+		false
+	);
+
+	assert.equal(
+		getNextStickToBottom({
+			scrollTop: 240,
+			clientHeight: 300,
+			scrollHeight: 900,
+			isSending: false,
+			currentlySticking: true
 		}),
 		false
 	);

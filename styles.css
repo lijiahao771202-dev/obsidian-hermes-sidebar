@@ -461,6 +461,62 @@
   color: var(--text-muted);
 }
 
+.hermes-sidebar-message-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 260px;
+}
+
+.hermes-sidebar-message-image-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.hermes-sidebar-message-image {
+  width: 100%;
+  max-height: 150px;
+  border-radius: 10px;
+  object-fit: cover;
+  display: block;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+  background: var(--background-primary);
+}
+
+.hermes-sidebar-message-image-button:hover .hermes-sidebar-message-image,
+.hermes-sidebar-message-image-button:focus-visible .hermes-sidebar-message-image {
+  border-color: color-mix(in srgb, var(--interactive-accent) 48%, var(--background-modifier-border));
+}
+
+.hermes-sidebar-image-preview-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+.hermes-sidebar-image-preview-full {
+  max-width: min(82vw, 920px);
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 14px;
+  background: var(--background-primary);
+}
+
+.hermes-sidebar-image-preview-caption {
+  max-width: min(82vw, 920px);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  word-break: break-word;
+}
+
 .hermes-sidebar-message-body > :first-child {
   margin-top: 0;
 }
@@ -482,7 +538,7 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 10px 12px 12px;
+  padding: 8px 12px 10px;
   border-top: 1px solid var(--background-modifier-border);
   background: transparent;
 }
@@ -490,14 +546,12 @@
 .hermes-sidebar-composer-shell {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 10px 8px;
+  gap: 6px;
+  padding: 8px;
   border: 1px solid color-mix(in srgb, var(--background-modifier-border) 88%, white 12%);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--background-primary) 84%, var(--background-secondary) 16%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.55),
-    0 6px 16px rgba(0, 0, 0, 0.04);
+  border-radius: 14px;
+  background: var(--background-primary);
+  box-shadow: none;
 }
 
 .hermes-sidebar-context {
@@ -516,39 +570,40 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   order: 3;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 72%, transparent);
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 56%, transparent);
 }
 
 .hermes-sidebar-controls {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
   min-width: 0;
   flex-wrap: nowrap;
-  padding: 3px 6px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, white 18%);
-  background: color-mix(in srgb, var(--background-primary) 78%, white 22%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .hermes-sidebar-attach-button {
-  border: 0;
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+  background: var(--background-primary);
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  padding: 5px 8px;
-  border-radius: 10px;
+  padding: 0 8px;
+  border-radius: 9px;
+  min-height: 30px;
   white-space: nowrap;
+  box-shadow: none;
 }
 
 .hermes-sidebar-attach-button:hover {
-  background: color-mix(in srgb, var(--background-secondary) 88%, white 12%);
+  background: var(--background-secondary);
   color: var(--text-normal);
 }
 
@@ -558,40 +613,43 @@
 
 .hermes-sidebar-control-group {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, max-content);
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  padding: 5px 8px;
+  padding: 0 4px;
+  min-height: 30px;
 }
 
 .hermes-sidebar-control-group + .hermes-sidebar-control-group {
-  border-left: 1px solid color-mix(in srgb, var(--background-modifier-border) 72%, transparent);
-  margin-left: 4px;
-  padding-left: 12px;
+  border-left: 1px solid color-mix(in srgb, var(--background-modifier-border) 54%, transparent);
+  margin-left: 2px;
+  padding-left: 8px;
 }
 
 .hermes-sidebar-control-label {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
 .hermes-sidebar-select {
   width: auto;
+  max-width: 68px;
   min-width: 0;
-  border-radius: 999px;
+  border-radius: 8px;
   border: 0;
   background: transparent;
   color: var(--text-normal);
-  padding: 0 18px 0 0;
-  font: inherit;
-  min-height: 20px;
+  padding: 0 16px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 24px;
   box-shadow: none;
   appearance: none;
   -webkit-appearance: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
   background-image:
     linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
     linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
@@ -603,15 +661,15 @@
 }
 
 .hermes-sidebar-input {
-  min-height: 64px;
-  max-height: 160px;
+  min-height: 78px;
+  max-height: 180px;
   resize: none;
-  border-radius: 14px;
+  border-radius: 12px;
   border: 0;
   background: transparent;
   color: var(--text-normal);
   padding: 2px 2px 0;
-  font: inherit;
+  font-size: 13px;
   line-height: 1.45;
   order: 1;
 }
@@ -621,17 +679,21 @@
 }
 
 .hermes-sidebar-send {
-  border: 0;
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
-  border-radius: 12px;
-  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border-radius: 10px;
+  padding: 0 12px;
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 8px 16px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
-  min-height: 38px;
+  box-shadow: none;
+  min-height: 32px;
   white-space: nowrap;
+}
+
+.hermes-sidebar-send:hover {
+  background: var(--background-secondary);
 }
 
 .hermes-sidebar-send:disabled {

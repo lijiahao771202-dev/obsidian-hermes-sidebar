@@ -19,6 +19,11 @@ export interface ScrollPositionInput {
 	threshold?: number;
 }
 
+export interface ScrollIntentInput extends ScrollPositionInput {
+	isSending: boolean;
+	currentlySticking: boolean;
+}
+
 export interface SelectionRefreshInput {
 	nextSelection: string;
 	currentSnapshot: string;
@@ -74,6 +79,13 @@ export function pickSelectionText(input: SelectionSourceInput): string {
 export function shouldStickToBottom(input: ScrollPositionInput): boolean {
 	const threshold = input.threshold ?? 24;
 	return input.scrollTop + input.clientHeight >= input.scrollHeight - threshold;
+}
+
+export function getNextStickToBottom(input: ScrollIntentInput): boolean {
+	if (input.isSending && input.currentlySticking) {
+		return true;
+	}
+	return shouldStickToBottom(input);
 }
 
 export function getRestoredScrollTop(
