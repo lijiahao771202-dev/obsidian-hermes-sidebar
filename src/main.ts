@@ -926,13 +926,13 @@ class HermesSidebarView extends ItemView {
 			});
 		}
 		this.modelSelectEl.value = this.plugin.settings.model;
-		this.modelSelectEl.addEventListener("change", async () => {
-			const selected = HERMES_MODEL_OPTIONS.find((item) => item.value === this.modelSelectEl?.value);
+		this.modelSelectEl.addEventListener("change", async (event) => {
+			const select = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget : this.modelSelectEl;
+			const selected = HERMES_MODEL_OPTIONS.find((item) => item.value === select?.value);
 			if (!selected) {
 				return;
 			}
-			this.plugin.settings.model = selected.value;
-			this.plugin.settings.provider = selected.provider;
+			this.applyModelSelection(selected.value);
 			await this.plugin.saveSettings();
 			this.statusText = `已切换到 ${selected.label}`;
 			this.render(false);
@@ -948,9 +948,10 @@ class HermesSidebarView extends ItemView {
 			});
 		}
 		this.reasoningSelectEl.value = this.plugin.settings.reasoningEffort;
-		this.reasoningSelectEl.addEventListener("change", async () => {
-			const value = this.reasoningSelectEl?.value?.trim() || DEFAULT_REASONING_EFFORT;
-			this.plugin.settings.reasoningEffort = value;
+		this.reasoningSelectEl.addEventListener("change", async (event) => {
+			const select = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget : this.reasoningSelectEl;
+			const value = select?.value?.trim() || DEFAULT_REASONING_EFFORT;
+			this.applyReasoningSelection(value);
 			await this.plugin.saveSettings();
 			this.statusText = `思考强度已切到 ${this.getReasoningLabel(value)}`;
 			this.render(false);
@@ -1172,6 +1173,29 @@ class HermesSidebarView extends ItemView {
 		this.renderContextChips();
 	}
 
+	private applyModelSelection(value: string): void {
+		const selected = HERMES_MODEL_OPTIONS.find((item) => item.value === value);
+		if (!selected) {
+			return;
+		}
+		this.plugin.settings.model = selected.value;
+		this.plugin.settings.provider = selected.provider;
+	}
+
+	private applyReasoningSelection(value: string): void {
+		const selected = HERMES_REASONING_OPTIONS.find((item) => item.value === value);
+		this.plugin.settings.reasoningEffort = selected?.value ?? DEFAULT_REASONING_EFFORT;
+	}
+
+	private syncComposerSettingsFromControls(): void {
+		if (this.modelSelectEl) {
+			this.applyModelSelection(this.modelSelectEl.value);
+		}
+		if (this.reasoningSelectEl) {
+			this.applyReasoningSelection(this.reasoningSelectEl.value);
+		}
+	}
+
 	private getConversationHistory(): Array<{ role: HermesRole; content: string }> {
 		return this.plugin
 			.getActiveSession()
@@ -1243,6 +1267,9 @@ class HermesSidebarView extends ItemView {
 	}
 
 	private formatActivityText(event: HermesBridgeEvent): string {
+		if (event.status === "info") {
+			return event.text?.trim() || event.message?.trim() || "";
+		}
 		const toolName = event.toolName?.trim() || "";
 		if (event.status === "running") {
 			return toolName ? formatToolStatusText(toolName, "running") : "正在调用工具";
@@ -1360,6 +1387,9 @@ class HermesSidebarView extends ItemView {
 			new Notice("Type a message or attach an image first.");
 			return;
 		}
+
+		this.syncComposerSettingsFromControls();
+		await this.plugin.saveSettings();
 
 		const turn: QueuedTurn = {
 			id: `queue-${Date.now()}-${++this.queueCounter}`,

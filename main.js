@@ -794,13 +794,13 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       });
     }
     this.modelSelectEl.value = this.plugin.settings.model;
-    this.modelSelectEl.addEventListener("change", async () => {
-      const selected = HERMES_MODEL_OPTIONS.find((item) => item.value === this.modelSelectEl?.value);
+    this.modelSelectEl.addEventListener("change", async (event) => {
+      const select = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget : this.modelSelectEl;
+      const selected = HERMES_MODEL_OPTIONS.find((item) => item.value === select?.value);
       if (!selected) {
         return;
       }
-      this.plugin.settings.model = selected.value;
-      this.plugin.settings.provider = selected.provider;
+      this.applyModelSelection(selected.value);
       await this.plugin.saveSettings();
       this.statusText = `\u5DF2\u5207\u6362\u5230 ${selected.label}`;
       this.render(false);
@@ -815,9 +815,10 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       });
     }
     this.reasoningSelectEl.value = this.plugin.settings.reasoningEffort;
-    this.reasoningSelectEl.addEventListener("change", async () => {
-      const value = this.reasoningSelectEl?.value?.trim() || DEFAULT_REASONING_EFFORT;
-      this.plugin.settings.reasoningEffort = value;
+    this.reasoningSelectEl.addEventListener("change", async (event) => {
+      const select = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget : this.reasoningSelectEl;
+      const value = select?.value?.trim() || DEFAULT_REASONING_EFFORT;
+      this.applyReasoningSelection(value);
       await this.plugin.saveSettings();
       this.statusText = `\u601D\u8003\u5F3A\u5EA6\u5DF2\u5207\u5230 ${this.getReasoningLabel(value)}`;
       this.render(false);
@@ -1011,6 +1012,26 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     cleanupAttachmentFile(removed.path);
     this.renderContextChips();
   }
+  applyModelSelection(value) {
+    const selected = HERMES_MODEL_OPTIONS.find((item) => item.value === value);
+    if (!selected) {
+      return;
+    }
+    this.plugin.settings.model = selected.value;
+    this.plugin.settings.provider = selected.provider;
+  }
+  applyReasoningSelection(value) {
+    const selected = HERMES_REASONING_OPTIONS.find((item) => item.value === value);
+    this.plugin.settings.reasoningEffort = selected?.value ?? DEFAULT_REASONING_EFFORT;
+  }
+  syncComposerSettingsFromControls() {
+    if (this.modelSelectEl) {
+      this.applyModelSelection(this.modelSelectEl.value);
+    }
+    if (this.reasoningSelectEl) {
+      this.applyReasoningSelection(this.reasoningSelectEl.value);
+    }
+  }
   getConversationHistory() {
     return this.plugin.getActiveSession().messages.filter((message) => message.kind !== "progress").map((message) => ({
       role: message.role,
@@ -1066,6 +1087,9 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     this.activityEntries = this.activityEntries.slice(-20);
   }
   formatActivityText(event) {
+    if (event.status === "info") {
+      return event.text?.trim() || event.message?.trim() || "";
+    }
     const toolName = event.toolName?.trim() || "";
     if (event.status === "running") {
       return toolName ? formatToolStatusText(toolName, "running") : "\u6B63\u5728\u8C03\u7528\u5DE5\u5177";
@@ -1168,6 +1192,8 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       new import_obsidian.Notice("Type a message or attach an image first.");
       return;
     }
+    this.syncComposerSettingsFromControls();
+    await this.plugin.saveSettings();
     const turn = {
       id: `queue-${Date.now()}-${++this.queueCounter}`,
       userText,

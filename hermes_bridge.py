@@ -279,6 +279,9 @@ def main() -> int:
     toolsets_list = sorted(_get_platform_tools(cfg, "cli"))
     fallback_chain = cfg.get("fallback_providers") or cfg.get("fallback_model")
     reasoning_config = parse_reasoning_effort(reasoning_effort)
+    resolved_provider = str(runtime.get("provider") or effective_provider or "").strip()
+    resolved_model = str(effective_model or "").strip()
+    resolved_reasoning = str(reasoning_effort or "").strip() or "default"
 
     session_db = None
     try:
@@ -287,6 +290,14 @@ def main() -> int:
         session_db = None
 
     emit({"type": "status", "text": "Hermes 已收到这条消息"})
+    emit({
+        "type": "activity",
+        "eventType": "run.config",
+        "status": "info",
+        "text": f"本轮使用：{resolved_provider}/{resolved_model} · 思考 {resolved_reasoning}",
+        "toolName": "run.config",
+        "preview": f"provider={resolved_provider}, model={resolved_model}, reasoning={resolved_reasoning}",
+    })
 
     streamed_chunks: list[str] = []
     progress_texts: list[str] = []
