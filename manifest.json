@@ -1,0 +1,10 @@
+{
+  "id": "hermes-sidebar",
+  "name": "Hermes Sidebar",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Chat with a local Hermes agent from an Obsidian sidebar and attach current note context.",
+  "author": "Codex",
+  "authorUrl": "https://openai.com",
+  "isDesktopOnly": true
+}
