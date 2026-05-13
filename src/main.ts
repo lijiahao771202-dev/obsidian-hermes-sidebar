@@ -143,15 +143,31 @@ interface HermesBridgePayload {
 }
 
 interface HermesBridgeEvent {
-	type: "status" | "progress" | "delta" | "segment_break" | "final" | "error";
+	type: "status" | "activity" | "progress" | "delta" | "segment_break" | "final" | "error";
 	text?: string;
 	message?: string;
 	sessionId?: string;
+	eventType?: string;
+	toolName?: string;
+	preview?: string;
+	status?: "running" | "done" | "error" | "info";
+	duration?: number;
+	isError?: boolean;
 }
 
 interface HermesBridgeRun {
 	promise: Promise<HermesRunResult>;
 	cancel: () => void;
+}
+
+interface HermesActivityEntry {
+	id: string;
+	text: string;
+	toolName?: string;
+	preview?: string;
+	status: "running" | "done" | "error" | "info";
+	duration?: number;
+	createdAt: number;
 }
 
 interface ActiveViewScrollSnapshot {
@@ -571,9 +587,12 @@ class HermesSidebarView extends ItemView {
 	private queueCounter = 0;
 	private hermesAvatarDataUrl?: string;
 	private isHistoryOpen = false;
+	private isActivityOpen = false;
 	private shouldAutoStickToBottom = true;
 	private pendingBottomScrollFrame: number | null = null;
 	private suppressNextMessagesScroll = false;
+	private activityEntries: HermesActivityEntry[] = [];
+	private activityCounter = 0;
 
 	constructor(leaf: WorkspaceLeaf, plugin: HermesSidebarPlugin) {
 		super(leaf);
@@ -794,14 +813,6 @@ class HermesSidebarView extends ItemView {
 			}
 		}
 
-		const statusText = this.buildStatusText();
-		if (statusText) {
-			root.createDiv({
-				cls: "hermes-sidebar-status",
-				text: statusText
-			});
-		}
-
 		if (this.queuedTurns.length > 0) {
 			const queueEl = root.createDiv({ cls: "hermes-sidebar-queue" });
 			queueEl.createDiv({
@@ -861,6 +872,7 @@ class HermesSidebarView extends ItemView {
 		this.scheduleMessagesToBottom();
 
 		const composer = root.createDiv({ cls: "hermes-sidebar-composer" });
+		this.renderActivityStatus(composer);
 		const preserveFocus = shouldRestoreComposerFocus(
 			!allowInputReset && !!this.inputEl && document.activeElement === this.inputEl,
 			this.shouldAutoStickToBottom
@@ -1029,6 +1041,57 @@ class HermesSidebarView extends ItemView {
 		}
 	}
 
+	private renderActivityStatus(container: HTMLDivElement): void {
+		const statusText = this.buildStatusText();
+		if (!statusText && this.activityEntries.length === 0) {
+			return;
+		}
+
+		const panel = container.createDiv({ cls: "hermes-sidebar-activity" });
+		const header = panel.createDiv({ cls: "hermes-sidebar-activity-header" });
+		header.createDiv({
+			cls: "hermes-sidebar-activity-status",
+			text: statusText || "活动记录"
+		});
+
+		const toggle = header.createEl("button", {
+			cls: "hermes-sidebar-activity-toggle",
+			text: this.isActivityOpen ? "收起" : "详情",
+			attr: { type: "button" }
+		});
+		toggle.disabled = this.activityEntries.length === 0;
+		toggle.addEventListener("click", () => {
+			this.isActivityOpen = !this.isActivityOpen;
+			this.render(false);
+		});
+
+		if (!this.isActivityOpen || this.activityEntries.length === 0) {
+			return;
+		}
+
+		const list = panel.createDiv({ cls: "hermes-sidebar-activity-list" });
+		for (const entry of this.activityEntries.slice(-8).reverse()) {
+			const item = list.createDiv({
+				cls: `hermes-sidebar-activity-item is-${entry.status}`
+			});
+			item.createDiv({
+				cls: "hermes-sidebar-activity-item-title",
+				text: entry.text
+			});
+			const metaParts = [
+				entry.toolName,
+				entry.preview,
+				typeof entry.duration === "number" ? `${entry.duration.toFixed(1)}s` : ""
+			].filter(Boolean);
+			if (metaParts.length > 0) {
+				item.createDiv({
+					cls: "hermes-sidebar-activity-item-meta",
+					text: metaParts.join(" · ")
+				});
+			}
+		}
+	}
+
 	private async renderMarkdownInto(container: HTMLDivElement, content: string): Promise<void> {
 		container.empty();
 		await MarkdownRenderer.render(this.app, content, container, "", this);
@@ -1138,6 +1201,59 @@ class HermesSidebarView extends ItemView {
 			content: text
 		});
 		this.persistActiveSession(false);
+	}
+
+	private pushActivityEntry(event: HermesBridgeEvent): void {
+		const text = this.formatActivityText(event);
+		if (!text) {
+			return;
+		}
+
+		const toolName = event.toolName?.trim() || undefined;
+		const preview = event.preview?.trim() || undefined;
+		const existingIndex = toolName
+			? this.activityEntries.findIndex((entry) =>
+				entry.toolName === toolName &&
+				entry.preview === preview &&
+				entry.status === "running"
+			)
+			: -1;
+		const status = event.status ?? (event.isError ? "error" : "info");
+		const entry: HermesActivityEntry = {
+			id: `activity-${Date.now()}-${++this.activityCounter}`,
+			text,
+			toolName,
+			preview,
+			status,
+			duration: typeof event.duration === "number" ? event.duration : undefined,
+			createdAt: Date.now()
+		};
+
+		if (existingIndex >= 0 && status !== "running") {
+			this.activityEntries[existingIndex] = {
+				...this.activityEntries[existingIndex],
+				...entry,
+				id: this.activityEntries[existingIndex].id
+			};
+		} else {
+			this.activityEntries.push(entry);
+		}
+
+		this.activityEntries = this.activityEntries.slice(-20);
+	}
+
+	private formatActivityText(event: HermesBridgeEvent): string {
+		const toolName = event.toolName?.trim() || "";
+		if (event.status === "running") {
+			return toolName ? formatToolStatusText(toolName, "running") : "正在调用工具";
+		}
+		if (event.status === "done") {
+			return toolName ? formatToolStatusText(toolName, "done") : "工具处理完了";
+		}
+		if (event.status === "error" || event.isError) {
+			return toolName ? formatToolStatusText(toolName, "error") : "工具调用失败";
+		}
+		return event.text?.trim() || event.message?.trim() || "";
 	}
 
 	private ensureStreamingFinalMessage(): HermesMessage {
@@ -1317,6 +1433,8 @@ class HermesSidebarView extends ItemView {
 		this.persistActiveSession();
 		this.activeStreamingMessageIndex = null;
 		this.isSending = true;
+		this.activityEntries = [];
+		this.isActivityOpen = false;
 		this.statusText = "Hermes 已收到这条消息";
 		this.render(false);
 		this.scrollMessagesToBottom();
@@ -1336,13 +1454,23 @@ class HermesSidebarView extends ItemView {
 				systemPrompt: buildHermesSystemPrompt(this.plugin.settings.systemPrompt),
 				pathPrefix: this.plugin.settings.pathPrefix,
 				onEvent: (event) => {
-					if (event.type === "status") {
-						this.statusText = event.text || this.statusText;
-						this.render(false);
-						return;
-					}
+						if (event.type === "status") {
+							this.statusText = event.text || this.statusText;
+							this.render(false);
+							return;
+						}
 
-					if (event.type === "progress") {
+						if (event.type === "activity") {
+							this.pushActivityEntry(event);
+							const activityText = this.formatActivityText(event);
+							if (activityText) {
+								this.statusText = activityText;
+							}
+							this.render(false);
+							return;
+						}
+
+						if (event.type === "progress") {
 						if (event.text) {
 							this.pushProgressBubble(event.text);
 							this.statusText = "Hermes 正在继续处理";
@@ -1992,6 +2120,50 @@ function summarizeSelectionLength(text: string): string {
 		return "0 chars";
 	}
 	return `${compact.length} chars`;
+}
+
+function formatToolDisplayName(toolName: string): string {
+	if (toolName === "skill_view") {
+		return "skill_view";
+	}
+	if (toolName === "skills_list") {
+		return "skills_list";
+	}
+	if (toolName === "skill_manage") {
+		return "skill_manage";
+	}
+	return toolName;
+}
+
+function formatToolStatusText(toolName: string, status: "running" | "done" | "error"): string {
+	if (toolName === "skill_view") {
+		return status === "running"
+			? "正在读取 skill"
+			: status === "done"
+				? "已读取 skill"
+				: "skill 读取失败";
+	}
+	if (toolName === "skills_list") {
+		return status === "running"
+			? "正在列出 skills"
+			: status === "done"
+				? "已列出 skills"
+				: "skills 列表读取失败";
+	}
+	if (toolName === "skill_manage") {
+		return status === "running"
+			? "正在管理 skill"
+			: status === "done"
+				? "已管理 skill"
+				: "skill 管理失败";
+	}
+	if (status === "running") {
+		return `正在调用 ${toolName}`;
+	}
+	if (status === "done") {
+		return `已完成 ${toolName}`;
+	}
+	return `${toolName} 调用失败`;
 }
 
 async function createPendingImageAttachment(file: File): Promise<PendingImageAttachment> {

@@ -50,6 +50,57 @@ def humanize_status(event_type: str, message: str) -> str:
     return "Hermes 正在处理"
 
 
+def format_tool_status(tool_name: str, status: str) -> str:
+    skill_labels = {
+        "skill_view": ("正在读取 skill", "已读取 skill", "skill 读取失败"),
+        "skills_list": ("正在列出 skills", "已列出 skills", "skills 列表读取失败"),
+        "skill_manage": ("正在管理 skill", "已管理 skill", "skill 管理失败"),
+    }
+    if tool_name in skill_labels:
+        running, done, error = skill_labels[tool_name]
+        if status == "running":
+            return running
+        if status == "done":
+            return done
+        if status == "error":
+            return error
+        return tool_name
+
+    label = tool_name or "工具"
+
+    if status == "running":
+        return f"正在调用 {label}"
+    if status == "error":
+        return f"{label} 调用失败"
+    if status == "done":
+        return f"已完成 {label}"
+    return label
+
+
+def emit_activity(
+    *,
+    event_type: str,
+    tool_name: str = "",
+    preview: str = "",
+    status: str = "info",
+    duration: float | None = None,
+    is_error: bool | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "type": "activity",
+        "eventType": event_type,
+        "toolName": tool_name,
+        "preview": preview,
+        "status": status,
+        "text": format_tool_status(tool_name, status),
+    }
+    if duration is not None:
+        payload["duration"] = duration
+    if is_error is not None:
+        payload["isError"] = is_error
+    emit(payload)
+
+
 def pick_bridge_final_text(
     *,
     final_text: str | None,
@@ -257,15 +308,34 @@ def main() -> int:
             streamed_chunks.append(visible)
             emit({"type": "delta", "text": visible})
 
-    def on_tool_progress(event_type: str, tool_name: str, preview: str, args: Any) -> None:
+    def on_tool_progress(
+        event_type: str,
+        tool_name: str,
+        preview: str,
+        args: Any,
+        **metadata: Any,
+    ) -> None:
         preview_text = str(preview or "").strip()
         if event_type == "reasoning.available" and preview_text:
             reasoning_previews.append(preview_text)
         if event_type == "tool.started":
-            emit({"type": "status", "text": "正在调用工具中"})
+            emit_activity(
+                event_type=event_type,
+                tool_name=str(tool_name or ""),
+                preview=preview_text,
+                status="running",
+            )
             return
         if event_type in {"tool.completed", "tool.error"}:
-            emit({"type": "status", "text": "工具处理完了"})
+            is_error = bool(metadata.get("is_error")) or event_type == "tool.error"
+            emit_activity(
+                event_type=event_type,
+                tool_name=str(tool_name or ""),
+                preview=preview_text,
+                status="error" if is_error else "done",
+                duration=metadata.get("duration"),
+                is_error=is_error,
+            )
             return
         if event_type in {"_thinking", "reasoning.available"}:
             emit({"type": "status", "text": "正在思考中"})

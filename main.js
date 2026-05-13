@@ -484,9 +484,12 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     this.activeStreamingMessageIndex = null;
     this.queueCounter = 0;
     this.isHistoryOpen = false;
+    this.isActivityOpen = false;
     this.shouldAutoStickToBottom = true;
     this.pendingBottomScrollFrame = null;
     this.suppressNextMessagesScroll = false;
+    this.activityEntries = [];
+    this.activityCounter = 0;
     this.plugin = plugin;
   }
   getViewType() {
@@ -686,13 +689,6 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         });
       }
     }
-    const statusText = this.buildStatusText();
-    if (statusText) {
-      root.createDiv({
-        cls: "hermes-sidebar-status",
-        text: statusText
-      });
-    }
     if (this.queuedTurns.length > 0) {
       const queueEl = root.createDiv({ cls: "hermes-sidebar-queue" });
       queueEl.createDiv({
@@ -748,6 +744,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     });
     this.scheduleMessagesToBottom();
     const composer = root.createDiv({ cls: "hermes-sidebar-composer" });
+    this.renderActivityStatus(composer);
     const preserveFocus = shouldRestoreComposerFocus(
       !allowInputReset && !!this.inputEl && document.activeElement === this.inputEl,
       this.shouldAutoStickToBottom
@@ -897,6 +894,52 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       preview.addEventListener("click", () => new HermesImagePreviewModal(this.app, image).open());
     }
   }
+  renderActivityStatus(container) {
+    const statusText = this.buildStatusText();
+    if (!statusText && this.activityEntries.length === 0) {
+      return;
+    }
+    const panel = container.createDiv({ cls: "hermes-sidebar-activity" });
+    const header = panel.createDiv({ cls: "hermes-sidebar-activity-header" });
+    header.createDiv({
+      cls: "hermes-sidebar-activity-status",
+      text: statusText || "\u6D3B\u52A8\u8BB0\u5F55"
+    });
+    const toggle = header.createEl("button", {
+      cls: "hermes-sidebar-activity-toggle",
+      text: this.isActivityOpen ? "\u6536\u8D77" : "\u8BE6\u60C5",
+      attr: { type: "button" }
+    });
+    toggle.disabled = this.activityEntries.length === 0;
+    toggle.addEventListener("click", () => {
+      this.isActivityOpen = !this.isActivityOpen;
+      this.render(false);
+    });
+    if (!this.isActivityOpen || this.activityEntries.length === 0) {
+      return;
+    }
+    const list = panel.createDiv({ cls: "hermes-sidebar-activity-list" });
+    for (const entry of this.activityEntries.slice(-8).reverse()) {
+      const item = list.createDiv({
+        cls: `hermes-sidebar-activity-item is-${entry.status}`
+      });
+      item.createDiv({
+        cls: "hermes-sidebar-activity-item-title",
+        text: entry.text
+      });
+      const metaParts = [
+        entry.toolName,
+        entry.preview,
+        typeof entry.duration === "number" ? `${entry.duration.toFixed(1)}s` : ""
+      ].filter(Boolean);
+      if (metaParts.length > 0) {
+        item.createDiv({
+          cls: "hermes-sidebar-activity-item-meta",
+          text: metaParts.join(" \xB7 ")
+        });
+      }
+    }
+  }
   async renderMarkdownInto(container, content) {
     container.empty();
     await import_obsidian.MarkdownRenderer.render(this.app, content, container, "", this);
@@ -990,6 +1033,50 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       content: text
     });
     this.persistActiveSession(false);
+  }
+  pushActivityEntry(event) {
+    const text = this.formatActivityText(event);
+    if (!text) {
+      return;
+    }
+    const toolName = event.toolName?.trim() || void 0;
+    const preview = event.preview?.trim() || void 0;
+    const existingIndex = toolName ? this.activityEntries.findIndex(
+      (entry2) => entry2.toolName === toolName && entry2.preview === preview && entry2.status === "running"
+    ) : -1;
+    const status = event.status ?? (event.isError ? "error" : "info");
+    const entry = {
+      id: `activity-${Date.now()}-${++this.activityCounter}`,
+      text,
+      toolName,
+      preview,
+      status,
+      duration: typeof event.duration === "number" ? event.duration : void 0,
+      createdAt: Date.now()
+    };
+    if (existingIndex >= 0 && status !== "running") {
+      this.activityEntries[existingIndex] = {
+        ...this.activityEntries[existingIndex],
+        ...entry,
+        id: this.activityEntries[existingIndex].id
+      };
+    } else {
+      this.activityEntries.push(entry);
+    }
+    this.activityEntries = this.activityEntries.slice(-20);
+  }
+  formatActivityText(event) {
+    const toolName = event.toolName?.trim() || "";
+    if (event.status === "running") {
+      return toolName ? formatToolStatusText(toolName, "running") : "\u6B63\u5728\u8C03\u7528\u5DE5\u5177";
+    }
+    if (event.status === "done") {
+      return toolName ? formatToolStatusText(toolName, "done") : "\u5DE5\u5177\u5904\u7406\u5B8C\u4E86";
+    }
+    if (event.status === "error" || event.isError) {
+      return toolName ? formatToolStatusText(toolName, "error") : "\u5DE5\u5177\u8C03\u7528\u5931\u8D25";
+    }
+    return event.text?.trim() || event.message?.trim() || "";
   }
   ensureStreamingFinalMessage() {
     const session = this.plugin.getActiveSession();
@@ -1146,6 +1233,8 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     this.persistActiveSession();
     this.activeStreamingMessageIndex = null;
     this.isSending = true;
+    this.activityEntries = [];
+    this.isActivityOpen = false;
     this.statusText = "Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F";
     this.render(false);
     this.scrollMessagesToBottom();
@@ -1166,6 +1255,15 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         onEvent: (event) => {
           if (event.type === "status") {
             this.statusText = event.text || this.statusText;
+            this.render(false);
+            return;
+          }
+          if (event.type === "activity") {
+            this.pushActivityEntry(event);
+            const activityText = this.formatActivityText(event);
+            if (activityText) {
+              this.statusText = activityText;
+            }
             this.render(false);
             return;
           }
@@ -1674,6 +1772,24 @@ function summarizeSelectionLength(text) {
     return "0 chars";
   }
   return `${compact.length} chars`;
+}
+function formatToolStatusText(toolName, status) {
+  if (toolName === "skill_view") {
+    return status === "running" ? "\u6B63\u5728\u8BFB\u53D6 skill" : status === "done" ? "\u5DF2\u8BFB\u53D6 skill" : "skill \u8BFB\u53D6\u5931\u8D25";
+  }
+  if (toolName === "skills_list") {
+    return status === "running" ? "\u6B63\u5728\u5217\u51FA skills" : status === "done" ? "\u5DF2\u5217\u51FA skills" : "skills \u5217\u8868\u8BFB\u53D6\u5931\u8D25";
+  }
+  if (toolName === "skill_manage") {
+    return status === "running" ? "\u6B63\u5728\u7BA1\u7406 skill" : status === "done" ? "\u5DF2\u7BA1\u7406 skill" : "skill \u7BA1\u7406\u5931\u8D25";
+  }
+  if (status === "running") {
+    return `\u6B63\u5728\u8C03\u7528 ${toolName}`;
+  }
+  if (status === "done") {
+    return `\u5DF2\u5B8C\u6210 ${toolName}`;
+  }
+  return `${toolName} \u8C03\u7528\u5931\u8D25`;
 }
 async function createPendingImageAttachment(file) {
   const extension = normalizeImageExtension(file);

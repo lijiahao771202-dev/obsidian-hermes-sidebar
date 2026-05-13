@@ -147,12 +147,6 @@
   color: var(--text-normal);
 }
 
-.hermes-sidebar-status {
-  padding: 6px 14px 0;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
 .hermes-sidebar-queue {
   margin: 10px 14px 0;
   padding: 10px 12px;
@@ -537,10 +531,94 @@
 .hermes-sidebar-composer {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 6px;
   padding: 8px 12px 10px;
   border-top: 1px solid var(--background-modifier-border);
   background: transparent;
+}
+
+.hermes-sidebar-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hermes-sidebar-activity-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--background-modifier-border) 70%, transparent);
+  background: color-mix(in srgb, var(--background-secondary) 72%, transparent);
+}
+
+.hermes-sidebar-activity-status {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hermes-sidebar-activity-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 1px 2px;
+  white-space: nowrap;
+}
+
+.hermes-sidebar-activity-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hermes-sidebar-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 3px 0;
+}
+
+.hermes-sidebar-activity-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--background-secondary) 62%, transparent);
+}
+
+.hermes-sidebar-activity-item.is-running {
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary));
+}
+
+.hermes-sidebar-activity-item.is-error {
+  background: color-mix(in srgb, var(--text-error) 10%, var(--background-secondary));
+}
+
+.hermes-sidebar-activity-item-title {
+  color: var(--text-normal);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.hermes-sidebar-activity-item-meta {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .hermes-sidebar-composer-shell {
