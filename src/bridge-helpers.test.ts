@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
 	buildTurnUserText,
+	composeObsidianPrompt,
 	pickBridgeFinalText
 } from "./bridge-helpers.ts";
 
@@ -56,4 +57,21 @@ test("pickBridgeFinalText prefers final text and then falls back to streamed tex
 		}),
 		"最后一条助手消息"
 	);
+});
+
+test("composeObsidianPrompt marks the current selection as selected text", () => {
+	const prompt = composeObsidianPrompt({
+		userText: "现在看到了吗",
+		contexts: [],
+		liveContext: {
+			noteTitle: "2026-05-15 专利转让与AI决策",
+			notePath: "复盘日志/2026-05-15 专利转让与AI决策.md",
+			selectionText: "WOOP 预规划：愿望、结果、障碍、计划"
+		}
+	});
+
+	assert.match(prompt, /## User highlighted selection/);
+	assert.match(prompt, /exact text currently selected\/highlighted/);
+	assert.match(prompt, /```text\nWOOP 预规划：愿望、结果、障碍、计划\n```/);
+	assert.match(prompt, /## User request\n\n现在看到了吗/);
 });

@@ -24,11 +24,33 @@ export interface ScrollIntentInput extends ScrollPositionInput {
 	currentlySticking: boolean;
 }
 
+export interface ScrollRestoreInput extends ScrollPositionInput {
+	targetScrollTop: number;
+}
+
 export interface SelectionRefreshInput {
 	nextSelection: string;
 	currentSnapshot: string;
 	isPointerDown: boolean;
+	keepExistingWhenEmpty?: boolean;
 }
+
+export interface MessageIdLike {
+	id?: string | null;
+}
+
+export interface MessageKindLike extends MessageIdLike {
+	kind?: string | null;
+}
+
+export type BridgeEventRenderType =
+	| "status"
+	| "activity"
+	| "progress"
+	| "delta"
+	| "segment_break"
+	| "final"
+	| "error";
 
 export function formatSelectionPreview(text: string, maxLength = 48): string {
 	const compact = text.replace(/\s+/g, " ").trim();
@@ -98,6 +120,71 @@ export function getRestoredScrollTop(
 	return previousScrollTop;
 }
 
+export function shouldDeferScrollRestore(input: ScrollRestoreInput): boolean {
+	if (input.targetScrollTop <= 0) {
+		return false;
+	}
+	return input.scrollHeight - input.clientHeight < input.targetScrollTop;
+}
+
+export function canUpdateBridgeEventWithoutFullRender(type: BridgeEventRenderType): boolean {
+	return type === "status" || type === "activity" || type === "progress" || type === "delta";
+}
+
+export function shouldShowActivityEntry(toolName?: string | null): boolean {
+	return (toolName || "").trim() !== "run.config";
+}
+
+export function shouldMergeActivityEntry(
+	toolName: string | undefined,
+	currentStatus: string,
+	incomingStatus: string,
+	currentPreview?: string,
+	incomingPreview?: string
+): boolean {
+	if (!toolName) {
+		return false;
+	}
+	if (toolName === "thinking") {
+		return currentStatus === "running" && incomingStatus === "running";
+	}
+	if (incomingStatus === "done" || incomingStatus === "error") {
+		return currentStatus === "running" && currentPreview === incomingPreview;
+	}
+	return currentStatus === "running" && currentPreview === incomingPreview;
+}
+
+export function getInsertIndexAfterMessage(messages: MessageIdLike[], messageId?: string): number | undefined {
+	if (!messageId) {
+		return undefined;
+	}
+	const index = messages.findIndex((message) => message.id === messageId);
+	return index >= 0 ? index + 1 : undefined;
+}
+
+export function adjustIndexAfterInsertion(index: number | null, insertIndex: number): number | null {
+	if (index === null) {
+		return null;
+	}
+	return index >= insertIndex ? index + 1 : index;
+}
+
+export function getAppendIndexAfterTurnMessages(messages: MessageKindLike[], turnStartMessageId?: string): number {
+	const anchorIndex = turnStartMessageId
+		? messages.findIndex((message) => message.id === turnStartMessageId)
+		: -1;
+	if (anchorIndex < 0) {
+		return messages.length;
+	}
+
+	for (let index = anchorIndex + 1; index < messages.length; index += 1) {
+		if (messages[index].kind === "user") {
+			return index;
+		}
+	}
+	return messages.length;
+}
+
 export function shouldRestoreComposerFocus(
 	hadComposerFocus: boolean,
 	shouldAutoStickToBottom: boolean
@@ -110,6 +197,10 @@ export function shouldRefreshSelectionSnapshot(input: SelectionRefreshInput): bo
 	const currentSnapshot = input.currentSnapshot.trim();
 
 	if (nextSelection === currentSnapshot) {
+		return false;
+	}
+
+	if (!nextSelection && currentSnapshot && input.keepExistingWhenEmpty) {
 		return false;
 	}
 

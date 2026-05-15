@@ -51,6 +51,15 @@ def humanize_status(event_type: str, message: str) -> str:
 
 
 def format_tool_status(tool_name: str, status: str) -> str:
+    if tool_name == "thinking":
+        if status == "running":
+            return "正在思考"
+        if status == "done":
+            return "已完成思考"
+        if status == "error":
+            return "思考失败"
+        return "thinking"
+
     skill_labels = {
         "skill_view": ("正在读取 skill", "已读取 skill", "skill 读取失败"),
         "skills_list": ("正在列出 skills", "已列出 skills", "skills 列表读取失败"),
@@ -83,6 +92,109 @@ def compact_preview(value: Any, *, max_length: int = 96) -> str:
     if len(text) <= max_length:
         return text
     return text[: max(0, max_length - 3)].rstrip() + "..."
+
+
+def should_emit_reasoning_activity(event_type: str, preview: Any) -> bool:
+    """Only true reasoning-stream events belong in the visible thinking row."""
+    return event_type == "_thinking" and bool(str(preview or "").strip())
+
+
+def should_display_reasoning_delta(text: Any) -> bool:
+    value = str(text or "").strip()
+    if len(value) < 2:
+        return False
+    normalized = value.lower()
+    tool_markers = (
+        "tool.started",
+        "tool.completed",
+        "tool.error",
+        "正在调用",
+        "已完成",
+        "调用失败",
+        "search_files",
+        "read_file",
+        "write_file",
+        "patch",
+        "terminal",
+        "skill_view",
+        "skills_list",
+    )
+    if any(marker in normalized for marker in tool_markers):
+        return False
+    if normalized in {"thinking", "running", "done", "info"}:
+        return False
+    return True
+
+
+def append_reasoning_delta_preview(buffer: list[str], text: Any, *, max_length: int = 2000) -> str:
+    chunk = str(text or "")
+    if not chunk:
+        return ""
+    buffer.append(chunk)
+    return compact_preview("".join(buffer), max_length=max_length)
+
+
+def extract_new_reasoning_delta(previous_text: str, text: Any) -> tuple[str, str]:
+    """Return only newly exposed reasoning text, tolerating cumulative snapshots."""
+    chunk = str(text or "")
+    if not chunk:
+        return "", previous_text
+    if previous_text:
+        if chunk == previous_text or chunk in previous_text or previous_text.endswith(chunk):
+            return "", previous_text
+        if chunk.startswith(previous_text):
+            return chunk[len(previous_text):], chunk
+    return chunk, f"{previous_text}{chunk}"
+
+
+def is_xiaomi_runtime(provider: str | None, base_url: str | None) -> bool:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_base_url = str(base_url or "").strip().lower()
+    return normalized_provider in {"xiaomi", "mimo", "xiaomi-mimo"} or "xiaomimimo.com" in normalized_base_url
+
+
+def is_deepseek_runtime(provider: str | None, base_url: str | None) -> bool:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_base_url = str(base_url or "").strip().lower()
+    return normalized_provider == "deepseek" or "api.deepseek.com" in normalized_base_url
+
+
+def apply_runtime_reasoning_to_api_kwargs(
+    api_kwargs: dict[str, Any],
+    *,
+    provider: str | None,
+    base_url: str | None,
+    reasoning_config: dict | None,
+) -> None:
+    is_xiaomi = is_xiaomi_runtime(provider, base_url)
+    is_deepseek = is_deepseek_runtime(provider, base_url)
+    if not is_xiaomi and not is_deepseek:
+        return
+    if not isinstance(reasoning_config, dict):
+        return
+
+    if is_deepseek:
+        extra_body = api_kwargs.setdefault("extra_body", {})
+        if not isinstance(extra_body, dict):
+            extra_body = {}
+            api_kwargs["extra_body"] = extra_body
+
+        if reasoning_config.get("enabled") is False:
+            api_kwargs.pop("reasoning_effort", None)
+            extra_body["thinking"] = {"type": "disabled"}
+            return
+
+        effort = str(reasoning_config.get("effort") or "").strip().lower()
+        api_kwargs["reasoning_effort"] = "max" if effort == "xhigh" else "high"
+        extra_body["thinking"] = {"type": "enabled"}
+        return
+
+    if reasoning_config.get("enabled") is False:
+        api_kwargs["reasoning_effort"] = "none"
+        return
+    effort = str(reasoning_config.get("effort") or "").strip().lower()
+    if effort in {"minimal", "low", "medium", "high", "xhigh"}:
+        api_kwargs["reasoning_effort"] = effort
 
 
 def summarize_tool_args(tool_name: str, args: Any, preview: str) -> str:
@@ -121,7 +233,7 @@ def emit_activity(
     duration: float | None = None,
     is_error: bool | None = None,
 ) -> None:
-    preview_text = compact_preview(preview, max_length=140)
+    preview_text = compact_preview(preview, max_length=2000 if tool_name == "thinking" else 140)
     payload: dict[str, Any] = {
         "type": "activity",
         "eventType": event_type,
@@ -338,6 +450,8 @@ def main() -> int:
     streamed_chunks: list[str] = []
     progress_texts: list[str] = []
     reasoning_previews: list[str] = []
+    reasoning_delta_parts: list[str] = []
+    last_reasoning_delta_text = ""
 
     def on_interim(text: str, *, already_streamed: bool = False) -> None:
         visible = str(text or "").strip()
@@ -362,9 +476,31 @@ def main() -> int:
         args: Any,
         **metadata: Any,
     ) -> None:
-        preview_text = summarize_tool_args(str(tool_name or ""), args, preview)
+        nonlocal last_reasoning_delta_text
+        is_reasoning_event = event_type in {"_thinking", "reasoning.available"}
+        if is_reasoning_event:
+            preview_text = compact_preview(preview or args, max_length=2000)
+        else:
+            preview_text = summarize_tool_args(str(tool_name or ""), args, preview)
+
         if event_type == "reasoning.available" and preview_text:
             reasoning_previews.append(preview_text)
+        if should_emit_reasoning_activity(event_type, preview_text):
+            delta, next_reasoning_text = extract_new_reasoning_delta(last_reasoning_delta_text, preview_text)
+            last_reasoning_delta_text = next_reasoning_text
+            if not should_display_reasoning_delta(delta):
+                return
+            preview_text = append_reasoning_delta_preview(reasoning_delta_parts, delta, max_length=2000)
+            emit_activity(
+                event_type=event_type,
+                tool_name="thinking",
+                preview=preview_text,
+                status="running",
+            )
+            return
+        if is_reasoning_event:
+            emit({"type": "status", "text": "正在思考中"})
+            return
         if event_type == "tool.started":
             emit_activity(
                 event_type=event_type,
@@ -384,13 +520,26 @@ def main() -> int:
                 is_error=is_error,
             )
             return
-        if event_type in {"_thinking", "reasoning.available"}:
-            emit({"type": "status", "text": "正在思考中"})
-            return
         emit({"type": "status", "text": humanize_status(event_type, preview or tool_name or "")})
 
     def on_status(event_type: str, message: str) -> None:
         emit({"type": "status", "text": humanize_status(event_type, message)})
+
+    def on_reasoning_delta(text: str) -> None:
+        nonlocal last_reasoning_delta_text
+        delta, next_reasoning_text = extract_new_reasoning_delta(last_reasoning_delta_text, text)
+        last_reasoning_delta_text = next_reasoning_text
+        if not should_display_reasoning_delta(delta):
+            return
+        preview_text = append_reasoning_delta_preview(reasoning_delta_parts, delta, max_length=2000)
+        if not preview_text:
+            return
+        emit_activity(
+            event_type="_thinking",
+            tool_name="thinking",
+            preview=preview_text,
+            status="running",
+        )
 
     def clarify_callback(question: str, choices=None) -> str:
         if choices:
@@ -415,6 +564,7 @@ def main() -> int:
         clarify_callback=clarify_callback,
         fallback_model=fallback_chain,
         reasoning_config=reasoning_config,
+        reasoning_callback=on_reasoning_delta,
         load_soul_identity=True,
     )
 
@@ -430,7 +580,14 @@ def main() -> int:
     if callable(original_build_api_kwargs):
         def _bridge_safe_build_api_kwargs(self, api_messages):
             safe_messages = prepare_messages_for_non_vision_model(self, copy.deepcopy(api_messages))
-            return original_build_api_kwargs(safe_messages)
+            api_kwargs = original_build_api_kwargs(safe_messages)
+            apply_runtime_reasoning_to_api_kwargs(
+                api_kwargs,
+                provider=getattr(self, "provider", None),
+                base_url=getattr(self, "base_url", None),
+                reasoning_config=getattr(self, "reasoning_config", None),
+            )
+            return api_kwargs
 
         agent._build_api_kwargs = _bridge_safe_build_api_kwargs.__get__(agent, agent.__class__)
 

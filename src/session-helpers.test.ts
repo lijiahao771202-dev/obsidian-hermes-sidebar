@@ -3,11 +3,18 @@ import { test } from "node:test";
 
 import {
 	DEFAULT_SESSION_TITLE,
+	adjustIndexAfterInsertion,
 	buildSessionTitle,
+	getAppendIndexAfterTurnMessages,
 	shouldRefreshSelectionSnapshot,
 	formatSelectionPreview,
+	getInsertIndexAfterMessage,
 	shouldHideStatusText,
+	canUpdateBridgeEventWithoutFullRender,
+	shouldMergeActivityEntry,
+	shouldShowActivityEntry,
 	shouldRestoreComposerFocus,
+	shouldDeferScrollRestore,
 	getNextStickToBottom,
 	getRestoredScrollTop,
 	pickNextActiveSessionId,
@@ -132,6 +139,82 @@ test("getRestoredScrollTop preserves the previous reading position only when aut
 	assert.equal(getRestoredScrollTop(null, false), undefined);
 });
 
+test("shouldDeferScrollRestore waits until async message rendering can hold the old position", () => {
+	assert.equal(
+		shouldDeferScrollRestore({
+			targetScrollTop: 920,
+			clientHeight: 320,
+			scrollHeight: 640
+		}),
+		true
+	);
+
+	assert.equal(
+		shouldDeferScrollRestore({
+			targetScrollTop: 920,
+			clientHeight: 320,
+			scrollHeight: 1400
+		}),
+		false
+	);
+
+	assert.equal(
+		shouldDeferScrollRestore({
+			targetScrollTop: 0,
+			clientHeight: 320,
+			scrollHeight: 320
+		}),
+		false
+	);
+});
+
+test("canUpdateBridgeEventWithoutFullRender keeps streaming events from rebuilding the message list", () => {
+	assert.equal(canUpdateBridgeEventWithoutFullRender("status"), true);
+	assert.equal(canUpdateBridgeEventWithoutFullRender("activity"), true);
+	assert.equal(canUpdateBridgeEventWithoutFullRender("progress"), true);
+	assert.equal(canUpdateBridgeEventWithoutFullRender("delta"), true);
+	assert.equal(canUpdateBridgeEventWithoutFullRender("final"), false);
+	assert.equal(canUpdateBridgeEventWithoutFullRender("segment_break"), false);
+});
+
+test("shouldShowActivityEntry hides run configuration from the visible timeline", () => {
+	assert.equal(shouldShowActivityEntry("run.config"), false);
+	assert.equal(shouldShowActivityEntry(" terminal "), true);
+	assert.equal(shouldShowActivityEntry("thinking"), true);
+	assert.equal(shouldShowActivityEntry(undefined), true);
+});
+
+test("shouldMergeActivityEntry keeps streaming thinking in a single visible row", () => {
+	assert.equal(shouldMergeActivityEntry("thinking", "running", "running", "让", "让我"), true);
+	assert.equal(shouldMergeActivityEntry("thinking", "done", "running", "让", "让我"), false);
+	assert.equal(shouldMergeActivityEntry("terminal", "running", "running", "cat a", "cat a"), true);
+	assert.equal(shouldMergeActivityEntry("terminal", "running", "running", "cat a", "cat b"), false);
+	assert.equal(shouldMergeActivityEntry("read_file", "running", "done", "/tmp/a.md", "/tmp/a.md"), true);
+	assert.equal(shouldMergeActivityEntry("read_file", "done", "done", "/tmp/a.md", "/tmp/a.md"), false);
+});
+
+test("activity insertion can stay anchored after the user message", () => {
+	const messages = [{ id: "user-1" }, { id: "assistant-1" }];
+	assert.equal(getInsertIndexAfterMessage(messages, "user-1"), 1);
+	assert.equal(getInsertIndexAfterMessage(messages, "missing"), undefined);
+	assert.equal(adjustIndexAfterInsertion(1, 1), 2);
+	assert.equal(adjustIndexAfterInsertion(0, 1), 0);
+	assert.equal(adjustIndexAfterInsertion(null, 1), null);
+});
+
+test("turn events append after prior events so assistant replies can interleave with activity rows", () => {
+	const messages = [
+		{ id: "user-1", kind: "user" },
+		{ id: "activity-1", kind: "activity" },
+		{ id: "assistant-1", kind: "final" }
+	];
+	assert.equal(getAppendIndexAfterTurnMessages(messages, "user-1"), 3);
+
+	const withNextTurn = [...messages, { id: "user-2", kind: "user" }];
+	assert.equal(getAppendIndexAfterTurnMessages(withNextTurn, "user-1"), 3);
+	assert.equal(getAppendIndexAfterTurnMessages(withNextTurn, "missing"), 4);
+});
+
 test("shouldRestoreComposerFocus only keeps focus when the user is already near the bottom", () => {
 	assert.equal(shouldRestoreComposerFocus(true, true), true);
 	assert.equal(shouldRestoreComposerFocus(true, false), false);
@@ -161,7 +244,18 @@ test("shouldRefreshSelectionSnapshot ignores transient drag updates until the se
 		shouldRefreshSelectionSnapshot({
 			nextSelection: "",
 			currentSnapshot: "旧选区",
-			isPointerDown: false
+			isPointerDown: false,
+			keepExistingWhenEmpty: true
+		}),
+		false
+	);
+
+	assert.equal(
+		shouldRefreshSelectionSnapshot({
+			nextSelection: "",
+			currentSnapshot: "旧选区",
+			isPointerDown: false,
+			keepExistingWhenEmpty: false
 		}),
 		true
 	);

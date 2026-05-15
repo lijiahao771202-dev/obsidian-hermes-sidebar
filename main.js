@@ -81,6 +81,48 @@ function getRestoredScrollTop(previousScrollTop, shouldAutoStickToBottom) {
   }
   return previousScrollTop;
 }
+function shouldDeferScrollRestore(input) {
+  if (input.targetScrollTop <= 0) {
+    return false;
+  }
+  return input.scrollHeight - input.clientHeight < input.targetScrollTop;
+}
+function canUpdateBridgeEventWithoutFullRender(type) {
+  return type === "status" || type === "activity" || type === "progress" || type === "delta";
+}
+function shouldShowActivityEntry(toolName) {
+  return (toolName || "").trim() !== "run.config";
+}
+function shouldMergeActivityEntry(toolName, currentStatus, incomingStatus, currentPreview, incomingPreview) {
+  if (!toolName) {
+    return false;
+  }
+  if (toolName === "thinking") {
+    return currentStatus === "running" && incomingStatus === "running";
+  }
+  if (incomingStatus === "done" || incomingStatus === "error") {
+    return currentStatus === "running" && currentPreview === incomingPreview;
+  }
+  return currentStatus === "running" && currentPreview === incomingPreview;
+}
+function adjustIndexAfterInsertion(index, insertIndex) {
+  if (index === null) {
+    return null;
+  }
+  return index >= insertIndex ? index + 1 : index;
+}
+function getAppendIndexAfterTurnMessages(messages, turnStartMessageId) {
+  const anchorIndex = turnStartMessageId ? messages.findIndex((message) => message.id === turnStartMessageId) : -1;
+  if (anchorIndex < 0) {
+    return messages.length;
+  }
+  for (let index = anchorIndex + 1; index < messages.length; index += 1) {
+    if (messages[index].kind === "user") {
+      return index;
+    }
+  }
+  return messages.length;
+}
 function shouldRestoreComposerFocus(hadComposerFocus, shouldAutoStickToBottom) {
   return hadComposerFocus && shouldAutoStickToBottom;
 }
@@ -88,6 +130,9 @@ function shouldRefreshSelectionSnapshot(input) {
   const nextSelection = input.nextSelection.trim();
   const currentSnapshot = input.currentSnapshot.trim();
   if (nextSelection === currentSnapshot) {
+    return false;
+  }
+  if (!nextSelection && currentSnapshot && input.keepExistingWhenEmpty) {
     return false;
   }
   if (input.isPointerDown && nextSelection) {
@@ -125,6 +170,42 @@ function buildTurnUserText(text, imageCount) {
   }
   return "";
 }
+function composeObsidianPrompt(input) {
+  const liveBlocks = [];
+  const { liveContext } = input;
+  if (liveContext.noteTitle || liveContext.notePath) {
+    liveBlocks.push(
+      [
+        "## Current open note",
+        liveContext.noteTitle ? `Title: ${liveContext.noteTitle}` : "",
+        liveContext.notePath ? `Path: ${liveContext.notePath}` : ""
+      ].filter(Boolean).join("\n")
+    );
+  }
+  if (liveContext.selectionText) {
+    liveBlocks.push(
+      [
+        "## User highlighted selection",
+        "The following text is the exact text currently selected/highlighted by the user in Obsidian. Treat it as attached context for this turn and answer against this selected text first.",
+        "```text",
+        liveContext.selectionText,
+        "```"
+      ].join("\n")
+    );
+  }
+  if (input.contexts.length === 0 && liveBlocks.length === 0) {
+    return input.userText;
+  }
+  const contextBlocks = input.contexts.map((context) => `## ${context.label}
+${context.content}`).join("\n\n");
+  return [
+    "The following Obsidian context is attached for this turn.",
+    ...liveBlocks,
+    contextBlocks,
+    "## User request",
+    input.userText
+  ].filter(Boolean).join("\n\n");
+}
 
 // src/main.ts
 var VIEW_TYPE_HERMES_SIDEBAR = "hermes-sidebar-view";
@@ -138,9 +219,24 @@ var DEFAULT_HERMES_ROOT = "/Users/lijiahao/.hermes/hermes-agent";
 var DEFAULT_HERMES_BRIDGE = "hermes_bridge.py";
 var DEFAULT_REASONING_EFFORT = "high";
 var HERMES_MODEL_OPTIONS = [
-  { label: "MiMo 2.5", shortLabel: "MiMo", value: "mimo-v2.5", provider: "xiaomi" },
-  { label: "DeepSeek V4 Flash", shortLabel: "DS Flash", value: "deepseek-v4-flash", provider: "deepseek" },
-  { label: "DeepSeek V4 Pro", shortLabel: "DS Pro", value: "deepseek-v4-pro", provider: "deepseek" }
+  {
+    label: "MiMo 2.5",
+    shortLabel: "MiMo",
+    value: "mimo-v2.5",
+    provider: "xiaomi"
+  },
+  {
+    label: "DeepSeek V4 Flash",
+    shortLabel: "DS Flash",
+    value: "deepseek-v4-flash",
+    provider: "deepseek"
+  },
+  {
+    label: "DeepSeek V4 Pro",
+    shortLabel: "DS Pro",
+    value: "deepseek-v4-pro",
+    provider: "deepseek"
+  }
 ];
 var HERMES_REASONING_OPTIONS = [
   { label: "\u5173\u95ED", value: "none" },
@@ -172,10 +268,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
   }
   async onload() {
     await this.loadSettings();
-    this.registerView(
-      VIEW_TYPE_HERMES_SIDEBAR,
-      (leaf) => new HermesSidebarView(leaf, this)
-    );
+    this.registerView(VIEW_TYPE_HERMES_SIDEBAR, (leaf) => new HermesSidebarView(leaf, this));
     this.addRibbonIcon("messages-square", "Open Hermes Sidebar", async () => {
       await this.activateView();
     });
@@ -203,32 +296,37 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
       }
     });
     this.addSettingTab(new HermesSidebarSettingTab(this.app, this));
-    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
-      const markdownView = leaf?.view instanceof import_obsidian.MarkdownView ? leaf.view : null;
-      if (!markdownView) {
-        return;
-      }
-      const currentPath = markdownView.file?.path ?? "";
-      const currentTitle = markdownView.file?.basename ?? "";
-      if (currentPath !== this.lastActiveNotePath || currentTitle !== this.lastActiveNoteTitle) {
-        this.lastActiveNotePath = currentPath;
-        this.lastActiveNoteTitle = currentTitle;
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        const markdownView = leaf?.view instanceof import_obsidian.MarkdownView ? leaf.view : null;
+        if (!markdownView) {
+          return;
+        }
+        const currentPath = markdownView.file?.path ?? "";
+        const currentTitle = markdownView.file?.basename ?? "";
+        if (currentPath !== this.lastActiveNotePath || currentTitle !== this.lastActiveNoteTitle) {
+          this.lastActiveNotePath = currentPath;
+          this.lastActiveNoteTitle = currentTitle;
+          this.scheduleRefreshSidebarViews();
+        }
+      })
+    );
+    this.registerEvent(
+      this.app.workspace.on("file-open", () => {
+        const markdownView = this.getActiveMarkdownView();
+        this.selectionSnapshot = "";
+        this.lastActiveNotePath = markdownView?.file?.path ?? this.lastActiveNotePath;
+        this.lastActiveNoteTitle = markdownView?.file?.basename ?? this.lastActiveNoteTitle;
         this.scheduleRefreshSidebarViews();
-      }
-    }));
-    this.registerEvent(this.app.workspace.on("file-open", () => {
-      const markdownView = this.getActiveMarkdownView();
-      this.selectionSnapshot = "";
-      this.lastActiveNotePath = markdownView?.file?.path ?? this.lastActiveNotePath;
-      this.lastActiveNoteTitle = markdownView?.file?.basename ?? this.lastActiveNoteTitle;
-      this.scheduleRefreshSidebarViews();
-    }));
+      })
+    );
     this.registerDomEvent(document, "selectionchange", () => {
       const selection = this.getCurrentSelectionText();
       if (shouldRefreshSelectionSnapshot({
         nextSelection: selection,
         currentSnapshot: this.selectionSnapshot,
-        isPointerDown: this.isPointerSelecting
+        isPointerDown: this.isPointerSelecting,
+        keepExistingWhenEmpty: this.isEventInsideHermesSidebar()
       })) {
         this.selectionSnapshot = selection;
         this.scheduleRefreshSidebarViews();
@@ -240,7 +338,12 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
     this.registerDomEvent(document, "pointerup", () => {
       this.isPointerSelecting = false;
       const selection = this.getCurrentSelectionText();
-      if (selection !== this.selectionSnapshot) {
+      if (shouldRefreshSelectionSnapshot({
+        nextSelection: selection,
+        currentSnapshot: this.selectionSnapshot,
+        isPointerDown: false,
+        keepExistingWhenEmpty: this.isEventInsideHermesSidebar()
+      })) {
         this.selectionSnapshot = selection;
         this.scheduleRefreshSidebarViews();
       }
@@ -253,11 +356,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
     const rawData = await this.loadData();
     const persistedData = isPersistedDataShape(rawData) ? rawData : void 0;
     const legacySettings = isPlainObject(rawData) ? rawData : void 0;
-    this.settings = Object.assign(
-      {},
-      DEFAULT_SETTINGS,
-      persistedData?.settings ?? legacySettings ?? {}
-    );
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, persistedData?.settings ?? legacySettings ?? {});
     this.chatSessions = restoreSessions(persistedData?.sessions);
     this.activeSessionId = pickNextActiveSessionId(this.chatSessions, persistedData?.activeSessionId) ?? this.chatSessions[0]?.id ?? "";
   }
@@ -284,7 +383,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
   }
   getCurrentSelectionText() {
     const view = this.getActiveMarkdownView();
-    const editorSelection = view?.editor.getSelection() ?? "";
+    const editorSelection = view ? getEditorSelectionsText(view) : "";
     const browserSelection = window.getSelection();
     const browserText = browserSelection?.toString().trim();
     const mode = view?.getMode?.() ?? "";
@@ -310,6 +409,16 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
       mode,
       editorSelection,
       browserSelection: ""
+    });
+  }
+  isEventInsideHermesSidebar() {
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement)) {
+      return false;
+    }
+    return this.app.workspace.getLeavesOfType(VIEW_TYPE_HERMES_SIDEBAR).some((leaf) => {
+      const sidebarView = leaf.view;
+      return sidebarView.containerEl.contains(activeElement);
     });
   }
   getLiveContextInfo() {
@@ -376,7 +485,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
       ...current,
       title: input.title?.trim() || current.title || DEFAULT_SESSION_TITLE,
       sessionId: input.sessionId,
-      messages: cloneMessages(input.messages),
+      messages: input.messages,
       updatedAt: touch ? Date.now() : current.updatedAt
     };
     void this.savePluginState();
@@ -399,9 +508,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
     }
     const editorScroll = markdownView.editor?.getScrollInfo?.();
     const elementScrolls = Array.from(
-      markdownView.containerEl.querySelectorAll(
-        ".cm-scroller, .markdown-preview-view, .view-content"
-      )
+      markdownView.containerEl.querySelectorAll(".cm-scroller, .markdown-preview-view, .view-content")
     ).map((element) => ({
       element,
       left: element.scrollLeft,
@@ -485,11 +592,15 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     this.isSending = false;
     this.isDrainingQueue = false;
     this.activeStreamingMessageIndex = null;
+    this.streamingRenderToken = 0;
+    this.pendingStreamingRenderFrame = null;
+    this.dismissedLiveNoteKey = "";
+    this.messageCounter = 0;
     this.queueCounter = 0;
     this.isHistoryOpen = false;
-    this.isActivityOpen = false;
     this.shouldAutoStickToBottom = true;
     this.pendingBottomScrollFrame = null;
+    this.pendingScrollRestoreFrame = null;
     this.suppressNextMessagesScroll = false;
     this.activityEntries = [];
     this.activityCounter = 0;
@@ -513,11 +624,24 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     for (const image of this.pendingImages) {
       cleanupAttachmentFile(image.path);
     }
+    if (this.pendingBottomScrollFrame !== null) {
+      window.cancelAnimationFrame(this.pendingBottomScrollFrame);
+      this.pendingBottomScrollFrame = null;
+    }
+    if (this.pendingScrollRestoreFrame !== null) {
+      window.cancelAnimationFrame(this.pendingScrollRestoreFrame);
+      this.pendingScrollRestoreFrame = null;
+    }
+    this.cancelPendingStreamingRender();
     this.pendingImages = [];
     this.containerEl.empty();
   }
   requestRefresh() {
-    this.render(false);
+    if (!this.liveContextEl) {
+      this.render(false);
+      return;
+    }
+    this.renderLiveContext();
   }
   isComposerFocused() {
     return !!this.inputEl && document.activeElement === this.inputEl;
@@ -542,7 +666,18 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     if (!allowInputReset && this.inputEl) {
       this.draftText = this.inputEl.value;
     }
+    this.streamingMessageRef = void 0;
+    this.streamingRowEl = void 0;
+    this.streamingBubbleEl = void 0;
+    this.streamingBodyEl = void 0;
+    this.activityMessageRef = void 0;
+    this.activityRowEl = void 0;
+    this.activityBubbleEl = void 0;
+    this.activityTimelineEl = void 0;
+    this.liveContextEl = void 0;
+    this.activityEl = void 0;
     const previousMessagesScrollTop = this.messagesEl?.scrollTop ?? null;
+    const wasAutoSticking = this.shouldAutoStickToBottom;
     this.captureScrollIntent();
     const root = this.containerEl;
     root.empty();
@@ -558,7 +693,9 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       cls: "hermes-sidebar-meta",
       text: `${this.getModelLabel(this.plugin.settings.model)} \xB7 ${this.getReasoningLabel(this.plugin.settings.reasoningEffort)}`
     });
-    const headerActions = header.createDiv({ cls: "hermes-sidebar-header-actions" });
+    const headerActions = header.createDiv({
+      cls: "hermes-sidebar-header-actions"
+    });
     const historyButton = headerActions.createEl("button", {
       cls: "hermes-sidebar-button",
       text: "\u5386\u53F2"
@@ -581,6 +718,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       this.pendingContexts = [];
       this.queuedTurns = [];
       this.activeStreamingMessageIndex = null;
+      this.dismissedLiveNoteKey = "";
       this.plugin.clearSelectionSnapshot(true);
       this.plugin.createSession();
       this.statusText = "\u5DF2\u5F00\u59CB\u65B0\u5BF9\u8BDD";
@@ -592,7 +730,9 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       cls: "hermes-sidebar-history-title",
       text: "\u6700\u8FD1\u5BF9\u8BDD"
     });
-    const historyList = historyPanel.createDiv({ cls: "hermes-sidebar-history-list" });
+    const historyList = historyPanel.createDiv({
+      cls: "hermes-sidebar-history-list"
+    });
     for (const session of this.plugin.getSessions()) {
       const item = historyList.createDiv({
         cls: `hermes-sidebar-history-item ${session.id === activeSession.id ? "is-active" : ""}`
@@ -616,6 +756,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         this.pendingContexts = [];
         this.queuedTurns = [];
         this.activeStreamingMessageIndex = null;
+        this.dismissedLiveNoteKey = "";
         this.plugin.setActiveSession(session.id);
         this.statusText = "\u5DF2\u5207\u6362\u5BF9\u8BDD";
         this.render();
@@ -636,62 +777,8 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         this.render();
       });
     }
-    const liveContext = this.plugin.getLiveContextInfo();
-    if (liveContext.noteTitle || liveContext.selectionText) {
-      const liveContextEl = root.createDiv({ cls: "hermes-sidebar-live-context" });
-      if (liveContext.noteTitle) {
-        const noteChip = liveContextEl.createDiv({
-          cls: "hermes-sidebar-chip hermes-sidebar-chip-note"
-        });
-        noteChip.createSpan({
-          cls: "hermes-sidebar-chip-prefix",
-          text: "Reading"
-        });
-        noteChip.createSpan({
-          cls: "hermes-sidebar-chip-value",
-          text: liveContext.noteTitle
-        });
-      }
-      if (liveContext.selectionText) {
-        const selectionBox = liveContextEl.createEl("details", {
-          cls: "hermes-sidebar-selection-preview"
-        });
-        const selectionHeader = selectionBox.createEl("summary", {
-          cls: "hermes-sidebar-selection-header"
-        });
-        const selectionHeaderMain = selectionHeader.createDiv({
-          cls: "hermes-sidebar-selection-summary-main"
-        });
-        selectionHeaderMain.createDiv({
-          cls: "hermes-sidebar-selection-label",
-          text: "Selection"
-        });
-        selectionHeaderMain.createDiv({
-          cls: "hermes-sidebar-selection-text",
-          text: formatSelectionPreview(liveContext.selectionText)
-        });
-        const selectionHeaderSide = selectionHeader.createDiv({
-          cls: "hermes-sidebar-selection-summary-side"
-        });
-        selectionHeaderSide.createDiv({
-          cls: "hermes-sidebar-selection-meta",
-          text: summarizeSelectionLength(liveContext.selectionText)
-        });
-        const clearButton = selectionHeaderSide.createEl("button", {
-          cls: "hermes-sidebar-clear-selection",
-          text: "\u6E05\u9664"
-        });
-        clearButton.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          this.plugin.clearSelectionSnapshot(true);
-        });
-        selectionBox.createDiv({
-          cls: "hermes-sidebar-selection-fulltext",
-          text: liveContext.selectionText
-        });
-      }
-    }
+    this.liveContextEl = root.createDiv({ cls: "hermes-sidebar-live-context" });
+    this.renderLiveContext();
     if (this.queuedTurns.length > 0) {
       const queueEl = root.createDiv({ cls: "hermes-sidebar-queue" });
       queueEl.createDiv({
@@ -723,16 +810,25 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         text: "\u9009\u62E9\u4E00\u6BB5\u6587\u5B57\uFF0C\u6216\u76F4\u63A5\u5411 Hermes \u63D0\u95EE\u3002"
       });
     } else {
-      for (const message of activeSession.messages) {
-        this.renderChatMessage(message);
+      for (const [index, message] of activeSession.messages.entries()) {
+        const rendered = this.renderChatMessage(message);
+        if (index === this.activeStreamingMessageIndex && message.kind === "final" && rendered) {
+          this.streamingMessageRef = message;
+          this.streamingRowEl = rendered.row;
+          this.streamingBubbleEl = rendered.bubble;
+          this.streamingBodyEl = rendered.body;
+        }
+        if (message.id === this.activeActivityMessageId && rendered?.activity) {
+          this.activityMessageRef = message;
+          this.activityRowEl = rendered.row;
+          this.activityBubbleEl = rendered.bubble;
+          this.activityTimelineEl = rendered.activity;
+        }
       }
     }
-    const restoredScrollTop = getRestoredScrollTop(
-      previousMessagesScrollTop,
-      this.shouldAutoStickToBottom
-    );
+    const restoredScrollTop = getRestoredScrollTop(previousMessagesScrollTop, this.shouldAutoStickToBottom);
     if (restoredScrollTop !== void 0) {
-      this.messagesEl.scrollTop = restoredScrollTop;
+      this.restoreMessagesScrollTop(restoredScrollTop);
     }
     this.messagesEl.addEventListener("scroll", () => {
       if (this.suppressNextMessagesScroll) {
@@ -745,9 +841,14 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         scrollHeight: this.messagesEl?.scrollHeight ?? 0
       });
     });
-    this.scheduleMessagesToBottom();
+    if (this.shouldAutoStickToBottom && wasAutoSticking) {
+      this.scheduleMessagesToBottom();
+    }
     const composer = root.createDiv({ cls: "hermes-sidebar-composer" });
-    this.renderActivityStatus(composer);
+    this.activityEl = composer.createDiv({
+      cls: "hermes-sidebar-activity-slot"
+    });
+    this.renderActivityStatus();
     const preserveFocus = shouldRestoreComposerFocus(
       !allowInputReset && !!this.inputEl && document.activeElement === this.inputEl,
       this.shouldAutoStickToBottom
@@ -787,9 +888,16 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       void this.handleFileInput(fileInput.files);
       fileInput.value = "";
     });
-    const modelControl = controls.createDiv({ cls: "hermes-sidebar-control-group" });
-    modelControl.createDiv({ cls: "hermes-sidebar-control-label", text: "\u6A21\u578B" });
-    this.modelSelectEl = modelControl.createEl("select", { cls: "hermes-sidebar-select" });
+    const modelControl = controls.createDiv({
+      cls: "hermes-sidebar-control-group"
+    });
+    modelControl.createDiv({
+      cls: "hermes-sidebar-control-label",
+      text: "\u6A21\u578B"
+    });
+    this.modelSelectEl = modelControl.createEl("select", {
+      cls: "hermes-sidebar-select"
+    });
     for (const option of HERMES_MODEL_OPTIONS) {
       this.modelSelectEl.createEl("option", {
         value: option.value,
@@ -808,9 +916,16 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       this.statusText = `\u5DF2\u5207\u6362\u5230 ${selected.label}`;
       this.render(false);
     });
-    const reasoningControl = controls.createDiv({ cls: "hermes-sidebar-control-group" });
-    reasoningControl.createDiv({ cls: "hermes-sidebar-control-label", text: "\u601D\u8003" });
-    this.reasoningSelectEl = reasoningControl.createEl("select", { cls: "hermes-sidebar-select" });
+    const reasoningControl = controls.createDiv({
+      cls: "hermes-sidebar-control-group"
+    });
+    reasoningControl.createDiv({
+      cls: "hermes-sidebar-control-label",
+      text: "\u601D\u8003"
+    });
+    this.reasoningSelectEl = reasoningControl.createEl("select", {
+      cls: "hermes-sidebar-select"
+    });
     for (const option of HERMES_REASONING_OPTIONS) {
       this.reasoningSelectEl.createEl("option", {
         value: option.value,
@@ -851,19 +966,120 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       }, 0);
     }
   }
-  renderChatMessage(message) {
-    if (!this.messagesEl) {
+  renderLiveContext() {
+    if (!this.liveContextEl) {
       return;
+    }
+    this.liveContextEl.empty();
+    const liveContext = this.plugin.getLiveContextInfo();
+    const liveNoteKey = this.getLiveNoteKey(liveContext);
+    const isNoteDismissed = !!liveNoteKey && this.dismissedLiveNoteKey === liveNoteKey;
+    const hasLiveContext = !!(liveContext.noteTitle && !isNoteDismissed || liveContext.selectionText);
+    this.liveContextEl.toggleClass("is-empty", !hasLiveContext);
+    this.liveContextEl.toggleClass("has-selection", !!liveContext.selectionText);
+    if (!hasLiveContext) {
+      return;
+    }
+    if (liveContext.noteTitle && !isNoteDismissed) {
+      const noteChip = this.liveContextEl.createDiv({
+        cls: "hermes-sidebar-chip hermes-sidebar-chip-note"
+      });
+      noteChip.createSpan({
+        cls: "hermes-sidebar-chip-prefix",
+        text: "Reading"
+      });
+      noteChip.createSpan({
+        cls: "hermes-sidebar-chip-value",
+        text: liveContext.noteTitle
+      });
+      const dismissNoteButton = noteChip.createEl("button", {
+        cls: "hermes-sidebar-chip-remove hermes-sidebar-live-note-dismiss",
+        text: "x",
+        attr: {
+          type: "button",
+          "aria-label": "\u672C\u8F6E\u4E0D\u9644\u52A0\u5F53\u524D\u6587\u7AE0"
+        }
+      });
+      dismissNoteButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.dismissedLiveNoteKey = liveNoteKey;
+        this.statusText = "\u672C\u8F6E\u5DF2\u53D6\u6D88\u9644\u52A0\u5F53\u524D\u6587\u7AE0";
+        this.renderLiveContext();
+        this.refreshActivityStatus();
+      });
+    }
+    if (!liveContext.selectionText) {
+      return;
+    }
+    const selectionBox = this.liveContextEl.createEl("details", {
+      cls: "hermes-sidebar-selection-preview"
+    });
+    const selectionHeader = selectionBox.createEl("summary", {
+      cls: "hermes-sidebar-selection-header"
+    });
+    const selectionHeaderMain = selectionHeader.createDiv({
+      cls: "hermes-sidebar-selection-summary-main"
+    });
+    selectionHeaderMain.createDiv({
+      cls: "hermes-sidebar-selection-label",
+      text: "Selection"
+    });
+    selectionHeaderMain.createDiv({
+      cls: "hermes-sidebar-selection-text",
+      text: formatSelectionPreview(liveContext.selectionText)
+    });
+    const selectionHeaderSide = selectionHeader.createDiv({
+      cls: "hermes-sidebar-selection-summary-side"
+    });
+    selectionHeaderSide.createDiv({
+      cls: "hermes-sidebar-selection-meta",
+      text: summarizeSelectionLength(liveContext.selectionText)
+    });
+    const clearButton = selectionHeaderSide.createEl("button", {
+      cls: "hermes-sidebar-clear-selection",
+      text: "\u6E05\u9664"
+    });
+    clearButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.plugin.clearSelectionSnapshot(true);
+    });
+    selectionBox.createDiv({
+      cls: "hermes-sidebar-selection-fulltext",
+      text: liveContext.selectionText
+    });
+  }
+  refreshActivityStatus() {
+    if (!this.activityEl) {
+      return;
+    }
+    this.renderActivityStatus();
+  }
+  renderChatMessage(message, options = {}) {
+    if (!this.messagesEl) {
+      return null;
+    }
+    if (message.kind === "activity" && !this.hasVisibleActivities(message)) {
+      return null;
     }
     const hasAttachments = (message.attachments ?? []).length > 0;
     const row = this.messagesEl.createDiv({
       cls: [
         "hermes-sidebar-chat-row",
+        message.kind === "activity" ? "is-activity" : "",
         message.role === "user" ? "is-user" : "is-assistant",
         message.kind,
         hasAttachments ? "has-attachments" : ""
       ].filter(Boolean).join(" ")
     });
+    if (message.id) {
+      row.dataset.hermesMessageId = message.id;
+    }
+    if (message.kind === "activity") {
+      const activity = this.renderMessageActivityTimeline(row, message);
+      return { row, bubble: row, body: row, activity };
+    }
     const avatar = row.createDiv({
       cls: `hermes-sidebar-avatar ${message.role === "user" ? "is-user" : "is-ai"}`
     });
@@ -887,21 +1103,151 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     const body = bubble.createDiv({
       cls: "hermes-sidebar-message-body"
     });
-    void this.renderMarkdownInto(body, message.content);
+    if (!options.deferBodyRender) {
+      void this.renderMarkdownInto(body, message.content);
+    }
     this.renderMessageAttachments(bubble, message);
+    return { row, bubble, body };
+  }
+  hasVisibleActivities(message) {
+    return (message.activities ?? []).some(
+      (entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
+    );
+  }
+  renderMessageActivityTimeline(container, message) {
+    const activities = (message.activities ?? []).filter(
+      (entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
+    );
+    if (activities.length === 0 || message.role !== "assistant") {
+      return void 0;
+    }
+    const isRunning = message.pending || activities.some((entry) => entry.status === "running");
+    const trace = container.createDiv({
+      cls: "hermes-sidebar-run-trace"
+    });
+    trace.toggleClass("is-running", isRunning);
+    const list = trace.createDiv({ cls: "hermes-sidebar-run-steps" });
+    for (const [index, entry] of activities.entries()) {
+      const item = list.createDiv({
+        cls: `hermes-sidebar-run-step is-${entry.status}`
+      });
+      item.createDiv({
+        cls: "hermes-sidebar-run-step-rail",
+        attr: { "aria-hidden": "true" }
+      });
+      const content = item.createDiv({
+        cls: "hermes-sidebar-run-step-content"
+      });
+      const header = content.createDiv({
+        cls: "hermes-sidebar-run-step-header"
+      });
+      header.createSpan({
+        cls: "hermes-sidebar-run-step-name",
+        text: formatActivityTitleForTimeline(entry, index)
+      });
+      header.createSpan({
+        cls: "hermes-sidebar-run-step-state",
+        text: formatActivityState(entry)
+      });
+      if (entry.preview) {
+        if (entry.toolName === "thinking") {
+          const thinkingPreview = content.createEl("details", {
+            cls: "hermes-sidebar-run-step-preview hermes-sidebar-thinking-preview"
+          });
+          thinkingPreview.createEl("summary", {
+            cls: "hermes-sidebar-thinking-preview-summary",
+            text: "\u67E5\u770B\u601D\u8003\u5185\u5BB9"
+          });
+          thinkingPreview.createDiv({
+            cls: "hermes-sidebar-thinking-preview-body",
+            text: entry.preview
+          });
+        } else {
+          content.createDiv({
+            cls: "hermes-sidebar-run-step-preview",
+            text: entry.preview
+          });
+        }
+      }
+      const meta = formatActivityMeta(entry);
+      if (meta) {
+        content.createDiv({
+          cls: "hermes-sidebar-run-step-meta",
+          text: meta
+        });
+      }
+    }
+    return trace;
+  }
+  ensureStreamingMessageElements(target) {
+    if (this.streamingMessageRef === target && this.streamingRowEl?.isConnected && this.streamingBubbleEl?.isConnected && this.streamingBodyEl?.isConnected) {
+      return this.streamingBodyEl;
+    }
+    const existingRow = this.findRenderedMessageRow(target);
+    if (existingRow) {
+      const bubble = existingRow.querySelector(".hermes-sidebar-bubble");
+      const body = bubble?.querySelector(".hermes-sidebar-message-body");
+      if (bubble && body) {
+        this.streamingMessageRef = target;
+        this.streamingRowEl = existingRow;
+        this.streamingBubbleEl = bubble;
+        this.streamingBodyEl = body;
+        return body;
+      }
+    }
+    const rendered = this.renderChatMessage(target, { deferBodyRender: true });
+    if (!rendered) {
+      return null;
+    }
+    this.streamingMessageRef = target;
+    this.streamingRowEl = rendered.row;
+    this.streamingBubbleEl = rendered.bubble;
+    this.streamingBodyEl = rendered.body;
+    return rendered.body;
+  }
+  queueStreamingMessageRender(target) {
+    const body = this.ensureStreamingMessageElements(target);
+    if (!body) {
+      return;
+    }
+    if (this.pendingStreamingRenderFrame !== null) {
+      return;
+    }
+    this.pendingStreamingRenderFrame = window.requestAnimationFrame(() => {
+      this.pendingStreamingRenderFrame = null;
+      const currentBody = this.ensureStreamingMessageElements(target);
+      if (!currentBody) {
+        return;
+      }
+      void this.renderStreamingMarkdownInto(currentBody, target.content);
+    });
+  }
+  cancelPendingStreamingRender() {
+    if (this.pendingStreamingRenderFrame === null) {
+      return;
+    }
+    window.cancelAnimationFrame(this.pendingStreamingRenderFrame);
+    this.pendingStreamingRenderFrame = null;
   }
   renderMessageAttachments(container, message) {
     const images = (message.attachments ?? []).filter((attachment) => attachment.type === "image");
     if (images.length === 0) {
       return;
     }
-    const gallery = container.createDiv({ cls: "hermes-sidebar-message-images" });
+    const gallery = container.createDiv({
+      cls: "hermes-sidebar-message-images"
+    });
     for (const image of images) {
       const preview = gallery.createEl("button", {
         cls: "hermes-sidebar-message-image-button",
-        attr: { type: "button", "aria-label": `\u67E5\u770B\u56FE\u7247 ${image.name || ""}`.trim() }
+        attr: {
+          type: "button",
+          "aria-label": `\u67E5\u770B\u56FE\u7247 ${image.name || ""}`.trim()
+        }
       });
-      const thumb = preview.createEl("img", { cls: "hermes-sidebar-message-image" });
+      const thumb = preview.createEl("img", {
+        cls: "hermes-sidebar-message-image"
+      });
       thumb.src = image.previewDataUrl;
       thumb.alt = image.name || "Attached image";
       thumb.title = image.name || "Attached image";
@@ -909,12 +1255,16 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       preview.addEventListener("click", () => new HermesImagePreviewModal(this.app, image).open());
     }
   }
-  renderActivityStatus(container) {
+  renderActivityStatus() {
+    if (!this.activityEl) {
+      return;
+    }
+    this.activityEl.empty();
     const statusText = this.buildStatusText();
     if (!statusText && this.activityEntries.length === 0) {
       return;
     }
-    const panel = container.createDiv({ cls: "hermes-sidebar-activity" });
+    const panel = this.activityEl.createDiv({ cls: "hermes-sidebar-activity" });
     const header = panel.createDiv({ cls: "hermes-sidebar-activity-header" });
     header.createDiv({
       cls: "hermes-sidebar-activity-status",
@@ -922,37 +1272,37 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     });
     const toggle = header.createEl("button", {
       cls: "hermes-sidebar-activity-toggle",
-      text: this.isActivityOpen ? "\u6536\u8D77" : "\u8BE6\u60C5",
+      text: "\u8FC7\u7A0B",
       attr: { type: "button" }
     });
     toggle.disabled = this.activityEntries.length === 0;
     toggle.addEventListener("click", () => {
-      this.isActivityOpen = !this.isActivityOpen;
-      this.render(false);
+      this.revealInlineActivityTimeline();
     });
-    if (!this.isActivityOpen || this.activityEntries.length === 0) {
-      return;
-    }
-    const list = panel.createDiv({ cls: "hermes-sidebar-activity-list" });
-    for (const entry of this.activityEntries.slice(-8).reverse()) {
-      const item = list.createDiv({
-        cls: `hermes-sidebar-activity-item is-${entry.status}`
-      });
-      item.createDiv({
-        cls: "hermes-sidebar-activity-item-title",
-        text: entry.text
-      });
-      const metaParts = [
-        entry.toolName,
-        entry.preview,
-        typeof entry.duration === "number" ? `${entry.duration.toFixed(1)}s` : ""
-      ].filter(Boolean);
-      if (metaParts.length > 0) {
-        item.createDiv({
-          cls: "hermes-sidebar-activity-item-meta",
-          text: metaParts.join(" \xB7 ")
-        });
+  }
+  revealInlineActivityTimeline() {
+    if (!this.activityTimelineEl?.isConnected) {
+      const target = this.getActiveActivityMessage();
+      if (target) {
+        this.ensureActivityMessageElements(target);
       }
+    }
+    if (this.activityTimelineEl instanceof HTMLDetailsElement) {
+      this.activityTimelineEl.open = true;
+    }
+    this.scheduleMessagesToBottom();
+  }
+  settleInlineActivityTimeline() {
+    const target = this.getActiveActivityMessage();
+    if (target?.role === "assistant" && target.kind === "activity") {
+      this.settleActivityMessage(target);
+      const timeline = this.ensureActivityMessageElements(target);
+      const bubble = this.activityBubbleEl;
+      if (timeline && bubble) {
+        timeline.remove();
+        this.activityTimelineEl = this.renderMessageActivityTimeline(bubble, target);
+      }
+      this.persistActiveSession(false);
     }
   }
   async renderMarkdownInto(container, content) {
@@ -960,16 +1310,22 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     await import_obsidian.MarkdownRenderer.render(this.app, content, container, "", this);
     this.scheduleMessagesToBottom();
   }
+  async renderStreamingMarkdownInto(container, content) {
+    const token = ++this.streamingRenderToken;
+    const scratch = document.createElement("div");
+    await import_obsidian.MarkdownRenderer.render(this.app, content, scratch, "", this);
+    if (token !== this.streamingRenderToken) {
+      return;
+    }
+    container.replaceChildren(...Array.from(scratch.childNodes));
+    this.scheduleMessagesToBottom();
+  }
   getHermesAvatarSrc() {
     if (this.hermesAvatarDataUrl) {
       return this.hermesAvatarDataUrl;
     }
     try {
-      const avatarPath = resolvePluginAssetPath(
-        this.app,
-        this.plugin.manifest.dir ?? "",
-        "hermes-avatar.png"
-      );
+      const avatarPath = resolvePluginAssetPath(this.app, this.plugin.manifest.dir ?? "", "hermes-avatar.png");
       const bytes = (0, import_node_fs.readFileSync)(avatarPath);
       this.hermesAvatarDataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
       return this.hermesAvatarDataUrl;
@@ -1000,7 +1356,9 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       });
     }
     for (const image of this.pendingImages) {
-      const chip = this.contextEl.createDiv({ cls: "hermes-sidebar-image-chip" });
+      const chip = this.contextEl.createDiv({
+        cls: "hermes-sidebar-image-chip"
+      });
       const thumb = chip.createEl("img", { cls: "hermes-sidebar-image-thumb" });
       thumb.src = image.previewDataUrl;
       thumb.alt = image.name;
@@ -1046,28 +1404,130 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       this.applyReasoningSelection(this.reasoningSelectEl.value);
     }
   }
+  getLiveNoteKey(liveContext = this.plugin.getLiveContextInfo()) {
+    return (liveContext.notePath || liveContext.noteTitle || "").trim();
+  }
+  getActiveTurnLiveContext() {
+    const liveContext = { ...this.plugin.getLiveContextInfo() };
+    const liveNoteKey = this.getLiveNoteKey(liveContext);
+    if (liveNoteKey && this.dismissedLiveNoteKey === liveNoteKey) {
+      delete liveContext.noteTitle;
+      delete liveContext.notePath;
+    }
+    return liveContext;
+  }
+  nextMessageId(prefix) {
+    return `${prefix}-${Date.now()}-${++this.messageCounter}`;
+  }
   getConversationHistory() {
-    return this.plugin.getActiveSession().messages.filter((message) => message.kind !== "progress").map((message) => ({
+    return this.plugin.getActiveSession().messages.filter((message) => !message.interim && message.kind !== "progress" && message.kind !== "activity").map((message) => ({
       role: message.role,
       content: message.content
     }));
   }
-  pushProgressBubble(content) {
+  appendInterimAssistantMessage(content) {
     const text = content.trim();
     if (!text) {
       return;
     }
     const session = this.plugin.getActiveSession();
-    const last = session.messages[session.messages.length - 1];
-    if (last && last.kind === "progress" && last.content === text) {
-      return;
-    }
-    session.messages.push({
+    this.appendTurnMessage(session, {
+      id: this.nextMessageId("assistant"),
       role: "assistant",
-      kind: "progress",
-      content: text
+      kind: "final",
+      content: text,
+      pending: false,
+      interim: true
     });
     this.persistActiveSession(false);
+    this.render(false);
+    this.scheduleMessagesToBottom();
+  }
+  appendTurnMessage(session, message) {
+    const insertIndex = getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
+    session.messages.splice(insertIndex, 0, message);
+    this.activeStreamingMessageIndex = adjustIndexAfterInsertion(this.activeStreamingMessageIndex, insertIndex);
+    return insertIndex;
+  }
+  ensureActivityMessage(entry) {
+    const session = this.plugin.getActiveSession();
+    const target = {
+      role: "assistant",
+      kind: "activity",
+      content: "",
+      pending: true,
+      id: this.nextMessageId("activity"),
+      activities: entry ? [entry] : []
+    };
+    this.appendTurnMessage(session, target);
+    this.activityMessageRef = target;
+    this.activeActivityMessageId = target.id;
+    this.activityRowEl = void 0;
+    this.activityBubbleEl = void 0;
+    this.activityTimelineEl = void 0;
+    this.persistActiveSession(false);
+    this.ensureActivityMessageElements(target);
+    return target;
+  }
+  ensureActivityMessageElements(target) {
+    if (this.activityMessageRef === target && this.activityRowEl?.isConnected && this.activityBubbleEl?.isConnected && this.activityTimelineEl?.isConnected) {
+      return this.activityTimelineEl;
+    }
+    if (this.activityMessageRef === target && this.activityBubbleEl?.isConnected) {
+      const existing = this.activityBubbleEl.querySelector(".hermes-sidebar-run-trace");
+      if (existing) {
+        this.activityTimelineEl = existing;
+        return existing;
+      }
+      const rendered2 = this.renderMessageActivityTimeline(this.activityBubbleEl, target);
+      if (rendered2) {
+        this.activityTimelineEl = rendered2;
+        return rendered2;
+      }
+    }
+    const existingRow = this.findRenderedMessageRow(target);
+    if (existingRow) {
+      const existingActivity = this.bindActivityMessageElements(target, existingRow);
+      if (existingActivity) {
+        return existingActivity;
+      }
+    }
+    const rendered = this.renderChatMessage(target);
+    if (!rendered?.activity) {
+      return null;
+    }
+    this.activityMessageRef = target;
+    this.activityRowEl = rendered.row;
+    this.activityBubbleEl = rendered.bubble;
+    this.activityTimelineEl = rendered.activity;
+    this.scheduleMessagesToBottom();
+    return rendered.activity;
+  }
+  findRenderedMessageRow(message) {
+    if (!this.messagesEl || !message.id) {
+      return null;
+    }
+    return Array.from(this.messagesEl.querySelectorAll(".hermes-sidebar-chat-row")).find(
+      (row) => row.dataset.hermesMessageId === message.id
+    ) ?? null;
+  }
+  bindActivityMessageElements(target, row) {
+    const bubble = target.kind === "activity" ? row : row.querySelector(".hermes-sidebar-bubble") ?? void 0;
+    if (!bubble) {
+      return null;
+    }
+    let activity = bubble.querySelector(".hermes-sidebar-run-trace");
+    if (!activity) {
+      activity = this.renderMessageActivityTimeline(bubble, target) ?? null;
+    }
+    if (!activity) {
+      return null;
+    }
+    this.activityMessageRef = target;
+    this.activityRowEl = row;
+    this.activityBubbleEl = bubble;
+    this.activityTimelineEl = activity;
+    return activity;
   }
   pushActivityEntry(event) {
     const text = this.formatActivityText(event);
@@ -1075,22 +1535,17 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       return;
     }
     const toolName = event.toolName?.trim() || void 0;
-    const preview = event.preview?.trim() || void 0;
-    const existingInfoIndex = event.eventType === "run.config" ? this.activityEntries.findIndex((entry2) => entry2.toolName === "run.config") : -1;
-    if (existingInfoIndex >= 0) {
-      this.activityEntries[existingInfoIndex] = {
-        ...this.activityEntries[existingInfoIndex],
-        text,
-        preview,
-        status: "info",
-        createdAt: Date.now()
-      };
+    if (!shouldShowActivityEntry(toolName)) {
       return;
     }
-    const existingIndex = toolName ? this.activityEntries.findIndex(
-      (entry2) => entry2.toolName === toolName && entry2.preview === preview && entry2.status === "running"
-    ) : -1;
+    const preview = event.preview?.trim() || void 0;
     const status = event.status ?? (event.isError ? "error" : "info");
+    if (toolName && toolName !== "thinking" && status === "running") {
+      this.settleCurrentActivityIf((entry2) => entry2.toolName === "thinking" && entry2.status === "running");
+    }
+    const existingIndex = toolName ? this.activityEntries.findIndex(
+      (entry2) => entry2.toolName === toolName && shouldMergeActivityEntry(toolName, entry2.status, status, entry2.preview, preview)
+    ) : -1;
     const entry = {
       id: `activity-${Date.now()}-${++this.activityCounter}`,
       text,
@@ -1100,14 +1555,17 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       duration: typeof event.duration === "number" ? event.duration : void 0,
       createdAt: Date.now()
     };
-    if (existingIndex >= 0 && status !== "running") {
-      this.activityEntries[existingIndex] = {
+    if (existingIndex >= 0) {
+      const mergedEntry = {
         ...this.activityEntries[existingIndex],
         ...entry,
         id: this.activityEntries[existingIndex].id
       };
+      this.activityEntries[existingIndex] = mergedEntry;
+      this.updateActivityMessageByEntryId(mergedEntry.id, mergedEntry);
     } else {
       this.activityEntries.push(entry);
+      this.ensureActivityMessage(entry);
     }
     this.activityEntries = this.activityEntries.slice(-20);
   }
@@ -1115,11 +1573,76 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     const entry = [...this.activityEntries].reverse().find((item) => item.toolName !== "run.config" && item.text.trim());
     return entry?.text.trim() ?? "";
   }
+  getActivityMessageByEntryId(entryId) {
+    return this.plugin.getActiveSession().messages.find(
+      (message) => message.kind === "activity" && message.role === "assistant" && (message.activities ?? []).some((entry) => entry.id === entryId)
+    );
+  }
+  getActiveActivityMessage() {
+    if (this.activityMessageRef?.id === this.activeActivityMessageId) {
+      return this.activityMessageRef;
+    }
+    return this.activeActivityMessageId ? this.plugin.getActiveSession().messages.find(
+      (message) => message.id === this.activeActivityMessageId && message.role === "assistant" && message.kind === "activity"
+    ) : void 0;
+  }
+  updateActivityMessageByEntryId(entryId, entry) {
+    const message = this.getActivityMessageByEntryId(entryId);
+    if (!message) {
+      return;
+    }
+    message.activities = (message.activities ?? []).map((activity) => activity.id === entryId ? entry : activity);
+    message.pending = this.isSending && entry.status === "running";
+    this.refreshActivityMessage(message);
+  }
+  settleActivityMessage(message) {
+    const activities = message.activities ?? [];
+    for (const entry of activities) {
+      if (entry.status === "running") {
+        entry.status = "done";
+      }
+    }
+    message.pending = false;
+  }
+  settleCurrentActivityIf(predicate) {
+    const target = this.getActiveActivityMessage();
+    if (!target?.activities?.some(predicate)) {
+      return;
+    }
+    for (const entry of target.activities) {
+      if (predicate(entry)) {
+        entry.status = "done";
+      }
+    }
+    target.pending = false;
+    for (const entry of this.activityEntries) {
+      if (predicate(entry)) {
+        entry.status = "done";
+      }
+    }
+    this.refreshActivityMessage(target);
+  }
+  refreshActivityMessage(target) {
+    const timeline = this.ensureActivityMessageElements(target);
+    const bubble = this.activityBubbleEl;
+    if (!timeline || !bubble) {
+      this.render(false);
+      return;
+    }
+    timeline.remove();
+    const nextTimeline = this.renderMessageActivityTimeline(bubble, target);
+    this.activityTimelineEl = nextTimeline;
+    this.persistActiveSession(false);
+    this.scheduleMessagesToBottom();
+  }
   pushLocalActivity(input) {
     const text = input.text.trim();
     if (!text) {
       return;
     }
+    const existingRunningIndex = input.toolName ? this.activityEntries.findIndex(
+      (entry2) => entry2.toolName === input.toolName && shouldMergeActivityEntry(input.toolName, entry2.status, input.status ?? "info", entry2.preview, input.preview)
+    ) : -1;
     const entry = {
       id: `activity-${Date.now()}-${++this.activityCounter}`,
       text,
@@ -1128,40 +1651,22 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       status: input.status ?? "info",
       createdAt: Date.now()
     };
-    this.activityEntries.push(entry);
+    if (existingRunningIndex >= 0) {
+      const updatedEntry = {
+        ...this.activityEntries[existingRunningIndex],
+        text,
+        status: entry.status,
+        preview: entry.preview,
+        createdAt: entry.createdAt
+      };
+      this.activityEntries[existingRunningIndex] = updatedEntry;
+      this.updateActivityMessageByEntryId(updatedEntry.id, updatedEntry);
+    } else {
+      this.activityEntries.push(entry);
+      this.ensureActivityMessage(entry);
+    }
     this.activityEntries = this.activityEntries.slice(-20);
     this.statusText = text;
-  }
-  seedTurnActivities(turn) {
-    this.pushLocalActivity({
-      text: `\u672C\u8F6E\u4F7F\u7528\uFF1A${this.getModelLabel(turn.model)} \xB7 \u601D\u8003 ${this.getReasoningLabel(turn.reasoningEffort)}`,
-      preview: `provider=${turn.provider}, model=${turn.model}, reasoning=${turn.reasoningEffort}`,
-      toolName: "run.config"
-    });
-    if (turn.liveContext.noteTitle || turn.liveContext.notePath) {
-      this.pushLocalActivity({
-        text: `\u6B63\u5728\u8BFB\u53D6\u5F53\u524D\u7B14\u8BB0\uFF1A${formatSelectionPreview(turn.liveContext.noteTitle || turn.liveContext.notePath || "", 40)}`,
-        preview: turn.liveContext.notePath
-      });
-    }
-    if (turn.liveContext.selectionText) {
-      this.pushLocalActivity({
-        text: `\u6B63\u5728\u5206\u6790\u9009\u4E2D\u6587\u672C\uFF1A${summarizeSelectionLength(turn.liveContext.selectionText)}`,
-        preview: formatSelectionPreview(turn.liveContext.selectionText, 96)
-      });
-    }
-    for (const context of turn.contexts) {
-      this.pushLocalActivity({
-        text: `\u5DF2\u9644\u52A0\u4E0A\u4E0B\u6587\uFF1A${formatSelectionPreview(context.label, 40)}`,
-        preview: formatSelectionPreview(context.content, 96)
-      });
-    }
-    if (turn.images.length > 0) {
-      this.pushLocalActivity({
-        text: `\u6B63\u5728\u8BC6\u522B\u56FE\u7247\uFF1A${turn.images.length} \u5F20`,
-        preview: turn.images.map((image) => image.name).join(", ")
-      });
-    }
   }
   setFallbackStatus(text) {
     if (!this.statusText || !this.activityEntries.length) {
@@ -1190,43 +1695,58 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     if (this.activeStreamingMessageIndex !== null) {
       const existing = session.messages[this.activeStreamingMessageIndex];
       if (existing && existing.kind === "final") {
+        this.ensureStreamingMessageElements(existing);
         return existing;
       }
     }
-    this.activeStreamingMessageIndex = session.messages.push({
+    const message = {
       role: "assistant",
       kind: "final",
       content: "",
-      pending: true
-    }) - 1;
+      pending: true,
+      id: this.nextMessageId("assistant")
+    };
+    this.activeStreamingMessageIndex = this.appendTurnMessage(session, message);
     this.persistActiveSession(false);
-    return session.messages[this.activeStreamingMessageIndex];
+    const target = session.messages[this.activeStreamingMessageIndex];
+    this.ensureStreamingMessageElements(target);
+    return target;
   }
   convertActiveStreamToProgress() {
     const session = this.plugin.getActiveSession();
-    if (this.activeStreamingMessageIndex === null) {
-      return;
+    if (this.activeStreamingMessageIndex !== null) {
+      const target = session.messages[this.activeStreamingMessageIndex];
+      if (target?.kind === "final" && target.content.trim()) {
+        target.pending = false;
+        this.cancelPendingStreamingRender();
+        if (this.streamingBodyEl?.isConnected) {
+          void this.renderStreamingMarkdownInto(this.streamingBodyEl, target.content);
+        }
+        this.persistActiveSession(false);
+      }
     }
-    const target = session.messages[this.activeStreamingMessageIndex];
-    if (!target || target.kind !== "final") {
-      this.activeStreamingMessageIndex = null;
-      return;
-    }
-    target.kind = "progress";
-    target.pending = false;
-    target.content = target.content.trim();
     this.activeStreamingMessageIndex = null;
-    this.persistActiveSession(false);
+    this.streamingMessageRef = void 0;
+    this.streamingRowEl = void 0;
+    this.streamingBubbleEl = void 0;
+    this.streamingBodyEl = void 0;
   }
   finalizeActiveStream(finalText) {
     const session = this.plugin.getActiveSession();
     if (this.activeStreamingMessageIndex === null) {
-      this.activeStreamingMessageIndex = session.messages.push({
+      const message = {
+        id: this.nextMessageId("assistant"),
         role: "assistant",
         kind: "final",
         content: finalText?.trim() || "(Hermes returned an empty response.)",
         pending: false
-      }) - 1;
+      };
+      this.activeStreamingMessageIndex = this.appendTurnMessage(session, message);
+      const target2 = session.messages[this.activeStreamingMessageIndex];
+      this.ensureStreamingMessageElements(target2);
+      if (this.streamingBodyEl?.isConnected) {
+        void this.renderStreamingMarkdownInto(this.streamingBodyEl, target2.content);
+      }
       this.persistActiveSession(false);
       return;
     }
@@ -1240,12 +1760,17 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       target.content = "(Hermes returned an empty response.)";
     }
     target.pending = false;
+    this.cancelPendingStreamingRender();
+    if (this.streamingBodyEl?.isConnected) {
+      void this.renderStreamingMarkdownInto(this.streamingBodyEl, target.content);
+    }
+    if ((target.activities ?? []).length > 0) {
+      this.refreshActivityMessage(target);
+    }
     this.persistActiveSession(false);
   }
   async handlePasteImages(event) {
-    const files = Array.from(event.clipboardData?.files ?? []).filter(
-      (file) => file.type.startsWith("image/")
-    );
+    const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
     if (files.length === 0) {
       return;
     }
@@ -1282,7 +1807,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       userText,
       contexts: [...this.pendingContexts],
       images: this.pendingImages.map((image) => ({ ...image })),
-      liveContext: { ...this.plugin.getLiveContextInfo() },
+      liveContext: this.getActiveTurnLiveContext(),
       provider: this.plugin.settings.provider,
       model: this.plugin.settings.model,
       reasoningEffort: this.plugin.settings.reasoningEffort
@@ -1295,6 +1820,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     if (turn.liveContext.selectionText) {
       this.plugin.clearSelectionSnapshot(false);
     }
+    this.dismissedLiveNoteKey = "";
     this.statusText = this.isSending ? `\u5DF2\u52A0\u5165\u961F\u5217\uFF08\u8FD8\u6709 ${this.queuedTurns.length} \u6761\u5F85\u5904\u7406\uFF09` : "Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F";
     this.render(false);
     this.focusComposerWithoutScroll();
@@ -1328,6 +1854,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       previewDataUrl: image.previewDataUrl
     }));
     const userMessage = {
+      id: this.nextMessageId("user"),
       role: "user",
       kind: "user",
       content: turn.userText
@@ -1336,19 +1863,21 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       userMessage.attachments = imageAttachments;
     }
     session.messages.push(userMessage);
+    this.activeTurnUserMessageId = userMessage.id;
     if (!session.title || session.title === DEFAULT_SESSION_TITLE) {
       session.title = buildSessionTitle(turn.userText);
     }
     this.persistActiveSession();
     this.activeStreamingMessageIndex = null;
+    this.activityMessageRef = void 0;
+    this.activeActivityMessageId = void 0;
     this.isSending = true;
     this.activityEntries = [];
-    this.isActivityOpen = false;
     this.statusText = "";
-    this.seedTurnActivities(turn);
     this.setFallbackStatus("Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F");
     this.render(false);
     this.scrollMessagesToBottom();
+    let hasFinalized = false;
     try {
       const run = runHermesBridge({
         binary: this.plugin.settings.hermesBinary,
@@ -1361,47 +1890,50 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         model: turn.model,
         reasoningEffort: turn.reasoningEffort,
         imagePaths: turn.images.map((image) => image.path),
-        systemPrompt: buildHermesSystemPrompt(this.plugin.settings.systemPrompt),
+        systemPrompt: buildHermesSystemPrompt(this.plugin.settings.systemPrompt, {
+          provider: turn.provider,
+          model: turn.model,
+          reasoningEffort: turn.reasoningEffort
+        }),
         pathPrefix: this.plugin.settings.pathPrefix,
         onEvent: (event) => {
-          if (event.type === "status") {
-            if (this.activityEntries.length === 0 || isDetailedStatusText(event.text || "")) {
-              this.statusText = event.text || this.statusText;
+          if (canUpdateBridgeEventWithoutFullRender(event.type)) {
+            if (event.type === "status") {
+              if (this.activityEntries.length === 0 || isDetailedStatusText(event.text || "")) {
+                this.statusText = event.text || this.statusText;
+              }
+              this.refreshActivityStatus();
+              return;
             }
-            this.render(false);
-            return;
-          }
-          if (event.type === "activity") {
-            this.pushActivityEntry(event);
-            const activityText = this.formatActivityText(event);
-            if (activityText && event.eventType !== "run.config") {
-              this.statusText = activityText;
+            if (event.type === "activity") {
+              this.pushActivityEntry(event);
+              const activityText = this.formatActivityText(event);
+              if (activityText && event.eventType !== "run.config") {
+                this.statusText = activityText;
+              }
+              this.refreshActivityStatus();
+              return;
             }
-            this.render(false);
-            return;
-          }
-          if (event.type === "progress") {
-            if (event.text) {
-              this.pushProgressBubble(event.text);
-              this.statusText = `\u6B63\u5728\u5904\u7406\uFF1A${formatSelectionPreview(event.text, 72)}`;
-              this.render(false);
-              this.scrollMessagesToBottom();
+            if (event.type === "progress") {
+              if (event.text) {
+                this.appendInterimAssistantMessage(event.text);
+                this.statusText = `\u6B63\u5728\u5904\u7406\uFF1A${formatSelectionPreview(event.text, 72)}`;
+                this.refreshActivityStatus();
+              }
+              return;
             }
-            return;
-          }
-          if (event.type === "delta") {
             const target = this.ensureStreamingFinalMessage();
             target.content += event.text || "";
             target.pending = true;
             this.statusText = `\u6B63\u5728\u5199\u56DE\u590D\uFF1A\u5DF2\u8F93\u51FA ${target.content.length} chars`;
-            this.render(false);
-            this.scrollMessagesToBottom();
+            this.queueStreamingMessageRender(target);
+            this.refreshActivityStatus();
             return;
           }
           if (event.type === "segment_break") {
             this.convertActiveStreamToProgress();
             this.setFallbackStatus("Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406");
-            this.render(false);
+            this.refreshActivityStatus();
             this.scrollMessagesToBottom();
             return;
           }
@@ -1410,9 +1942,12 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
               session.sessionId = event.sessionId;
             }
             this.finalizeActiveStream(event.text);
+            this.settleInlineActivityTimeline();
+            this.activeStreamingMessageIndex = null;
+            hasFinalized = true;
             this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
-            this.render(false);
-            this.scrollMessagesToBottom();
+            this.refreshActivityStatus();
+            this.scheduleMessagesToBottom();
           }
         }
       });
@@ -1421,36 +1956,52 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       if (result.sessionId) {
         session.sessionId = result.sessionId;
       }
-      this.finalizeActiveStream(result.text);
+      if (!hasFinalized) {
+        this.finalizeActiveStream(result.text);
+        this.settleInlineActivityTimeline();
+        this.activeStreamingMessageIndex = null;
+        hasFinalized = true;
+      }
       this.persistActiveSession();
       this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
+      this.refreshActivityStatus();
     } catch (error) {
       if (isHermesAbortError(error)) {
         this.convertActiveStreamToProgress();
-        this.pushProgressBubble("\u597D\uFF0C\u6211\u5148\u505C\u5728\u8FD9\u91CC\u3002");
+        this.appendInterimAssistantMessage("\u597D\uFF0C\u6211\u5148\u505C\u5728\u8FD9\u91CC\u3002");
+        this.settleInlineActivityTimeline();
+        this.activeStreamingMessageIndex = null;
         this.statusText = "\u5F53\u524D\u4EFB\u52A1\u5DF2\u505C\u6B62";
       } else {
         this.activeStreamingMessageIndex = null;
         const message = error instanceof Error ? error.message : String(error);
-        session.messages.push({
+        this.settleInlineActivityTimeline();
+        const errorMessage = {
+          id: this.nextMessageId("assistant"),
           role: "assistant",
           kind: "final",
           content: `Hermes call failed.
 
 ${message}`
-        });
+        };
+        this.appendTurnMessage(session, errorMessage);
         this.persistActiveSession();
+        this.renderChatMessage(errorMessage);
         this.statusText = "Hermes call failed";
         new import_obsidian.Notice("Hermes request failed. Check the sidebar for details.");
       }
+      this.refreshActivityStatus();
     } finally {
+      this.activeTurnUserMessageId = void 0;
+      this.activeActivityMessageId = void 0;
       for (const image of turn.images) {
         cleanupAttachmentFile(image.path);
       }
       this.activeRunCancel = void 0;
       this.isSending = false;
-      this.render(false);
-      this.scrollMessagesToBottom();
+      this.settleInlineActivityTimeline();
+      this.refreshActivityStatus();
+      this.scheduleMessagesToBottom();
     }
   }
   stopActiveRun() {
@@ -1459,7 +2010,7 @@ ${message}`
     }
     this.statusText = "\u6B63\u5728\u505C\u6B62\u5F53\u524D\u4EFB\u52A1";
     this.activeRunCancel();
-    this.render(false);
+    this.refreshActivityStatus();
   }
   persistActiveSession(touch = true) {
     const session = this.plugin.getActiveSession();
@@ -1475,32 +2026,7 @@ ${message}`
     );
   }
   composePrompt(userText, contexts, liveContext) {
-    const liveBlocks = [];
-    if (liveContext.noteTitle || liveContext.notePath) {
-      liveBlocks.push(
-        [
-          "## Current open note",
-          liveContext.noteTitle ? `Title: ${liveContext.noteTitle}` : "",
-          liveContext.notePath ? `Path: ${liveContext.notePath}` : ""
-        ].filter(Boolean).join("\n")
-      );
-    }
-    if (liveContext.selectionText) {
-      liveBlocks.push(`## Current selection
-${liveContext.selectionText}`);
-    }
-    if (contexts.length === 0 && liveBlocks.length === 0) {
-      return userText;
-    }
-    const contextBlocks = contexts.map((context) => `## ${context.label}
-${context.content}`).join("\n\n");
-    return [
-      "The following Obsidian context is attached for this turn.",
-      ...liveBlocks,
-      contextBlocks,
-      "## User request",
-      userText
-    ].filter(Boolean).join("\n\n");
+    return composeObsidianPrompt({ userText, contexts, liveContext });
   }
   buildStatusText() {
     const parts = [];
@@ -1527,8 +2053,39 @@ ${context.content}`).join("\n\n");
     if (!this.messagesEl || !this.shouldAutoStickToBottom) {
       return;
     }
+    if (this.pendingScrollRestoreFrame !== null) {
+      window.cancelAnimationFrame(this.pendingScrollRestoreFrame);
+      this.pendingScrollRestoreFrame = null;
+    }
     this.suppressNextMessagesScroll = true;
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+  }
+  restoreMessagesScrollTop(targetScrollTop) {
+    if (!this.messagesEl) {
+      return;
+    }
+    if (this.pendingScrollRestoreFrame !== null) {
+      window.cancelAnimationFrame(this.pendingScrollRestoreFrame);
+      this.pendingScrollRestoreFrame = null;
+    }
+    this.suppressNextMessagesScroll = true;
+    this.messagesEl.scrollTop = targetScrollTop;
+    if (!shouldDeferScrollRestore({
+      targetScrollTop,
+      scrollTop: this.messagesEl.scrollTop,
+      clientHeight: this.messagesEl.clientHeight,
+      scrollHeight: this.messagesEl.scrollHeight
+    })) {
+      return;
+    }
+    this.pendingScrollRestoreFrame = window.requestAnimationFrame(() => {
+      this.pendingScrollRestoreFrame = null;
+      if (!this.messagesEl || this.shouldAutoStickToBottom) {
+        return;
+      }
+      this.suppressNextMessagesScroll = true;
+      this.messagesEl.scrollTop = targetScrollTop;
+    });
   }
   scheduleMessagesToBottom() {
     if (!this.messagesEl || !this.shouldAutoStickToBottom) {
@@ -1727,11 +2284,13 @@ function runHermesBridge(input) {
         return;
       }
       settled = true;
-      resolve2(finalResult ?? {
-        text: "",
-        sessionId: input.sessionId,
-        rawOutput: cleanOutputForDisplay(stderrBuffer)
-      });
+      resolve2(
+        finalResult ?? {
+          text: "",
+          sessionId: input.sessionId,
+          rawOutput: cleanOutputForDisplay(stderrBuffer)
+        }
+      );
     });
     const payload = {
       prompt: input.prompt,
@@ -1769,9 +2328,14 @@ function runHermesBridge(input) {
     }
   };
 }
-function buildHermesSystemPrompt(basePrompt) {
+function buildHermesSystemPrompt(basePrompt, runtime) {
   const trimmed = basePrompt.trim();
+  const runtimeProvider = runtime?.provider?.trim() || "unknown";
+  const runtimeModel = runtime?.model?.trim() || "unknown";
+  const runtimeReasoning = runtime?.reasoningEffort?.trim() || "default";
   const progressInstruction = [
+    `Current runtime: provider=${runtimeProvider}, model=${runtimeModel}, reasoning_effort=${runtimeReasoning}.`,
+    "If the user asks what reasoning strength is active, answer from this Current runtime line instead of guessing from your hidden internals.",
     "While working, you may send brief interim assistant messages to the user in natural Chinese.",
     "Use those interim messages like real progress updates someone would actually say in chat.",
     "Keep them short and warm.",
@@ -1817,7 +2381,8 @@ function isHermesAbortError(error) {
 function cloneMessages(messages) {
   return messages.map((message) => ({
     ...message,
-    attachments: cloneMessageAttachments(message.attachments)
+    attachments: cloneMessageAttachments(message.attachments),
+    activities: cloneActivityEntries(message.activities)
   }));
 }
 function cloneMessageAttachments(attachments) {
@@ -1825,6 +2390,13 @@ function cloneMessageAttachments(attachments) {
     return void 0;
   }
   const cloned = attachments.filter(isHermesMessageAttachment).map((attachment) => ({ ...attachment }));
+  return cloned.length > 0 ? cloned : void 0;
+}
+function cloneActivityEntries(activities) {
+  if (!Array.isArray(activities) || activities.length === 0) {
+    return void 0;
+  }
+  const cloned = activities.filter(isHermesActivityEntry).map((activity) => ({ ...activity }));
   return cloned.length > 0 ? cloned : void 0;
 }
 function createChatSession(seed) {
@@ -1873,13 +2445,46 @@ function isHermesMessage(value) {
   if (!isPlainObject(value)) {
     return false;
   }
+  if ("id" in value && value.id !== void 0 && typeof value.id !== "string") {
+    return false;
+  }
   if ("attachments" in value && value.attachments !== void 0 && !Array.isArray(value.attachments)) {
     return false;
   }
-  return (value.role === "user" || value.role === "assistant" || value.role === "system") && (value.kind === "user" || value.kind === "progress" || value.kind === "final") && typeof value.content === "string";
+  if ("activities" in value && value.activities !== void 0 && !Array.isArray(value.activities)) {
+    return false;
+  }
+  if ("interim" in value && value.interim !== void 0 && typeof value.interim !== "boolean") {
+    return false;
+  }
+  return (value.role === "user" || value.role === "assistant" || value.role === "system") && (value.kind === "user" || value.kind === "progress" || value.kind === "activity" || value.kind === "final") && typeof value.content === "string";
+}
+function isHermesActivityEntry(value) {
+  return isPlainObject(value) && typeof value.id === "string" && typeof value.text === "string" && (value.status === "running" || value.status === "done" || value.status === "error" || value.status === "info") && typeof value.createdAt === "number";
 }
 function isHermesMessageAttachment(value) {
   return isPlainObject(value) && value.type === "image" && typeof value.name === "string" && typeof value.previewDataUrl === "string";
+}
+function getEditorSelectionsText(view) {
+  const editor = view.editor;
+  const ranges = editor.listSelections().map((selection) => getEditorSelectionRangeText(view, selection.anchor, selection.head)).map((text) => text.trim()).filter(Boolean) ?? [];
+  if (ranges.length > 1) {
+    return ranges.join("\n\n---\n\n");
+  }
+  return ranges[0] ?? editor.getSelection();
+}
+function getEditorSelectionRangeText(view, anchor, head) {
+  const [from, to] = compareEditorPositions(anchor, head) <= 0 ? [anchor, head] : [head, anchor];
+  if (from.line === to.line && from.ch === to.ch) {
+    return "";
+  }
+  return view.editor.getRange(from, to);
+}
+function compareEditorPositions(left, right) {
+  if (left.line !== right.line) {
+    return left.line - right.line;
+  }
+  return left.ch - right.ch;
 }
 function summarizeSelectionLength(text) {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -1895,6 +2500,37 @@ function joinActivityText(label, preview, maxLength = 72) {
   }
   return `${label}\uFF1A${formatSelectionPreview(compactPreview, maxLength)}`;
 }
+function formatActivityTitleForTimeline(entry, index) {
+  if (entry.toolName === "run.config") {
+    return "Run config";
+  }
+  if (entry.toolName === "thinking") {
+    return "thinking";
+  }
+  if (entry.toolName) {
+    return formatToolDisplayName(entry.toolName);
+  }
+  return `Step ${index + 1}`;
+}
+function formatActivityState(entry) {
+  if (entry.status === "running") {
+    return "running";
+  }
+  if (entry.status === "done") {
+    return typeof entry.duration === "number" ? `${entry.duration.toFixed(1)}s` : "done";
+  }
+  if (entry.status === "error") {
+    return "error";
+  }
+  return "info";
+}
+function formatActivityMeta(entry) {
+  const parts = [
+    entry.text,
+    typeof entry.duration === "number" && entry.status !== "done" ? `${entry.duration.toFixed(1)}s` : ""
+  ].filter(Boolean);
+  return parts.join(" \xB7 ");
+}
 function isDetailedStatusText(text) {
   const value = text.trim();
   if (!value) {
@@ -1908,6 +2544,18 @@ function isDetailedStatusText(text) {
     "Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406",
     "Hermes \u6B63\u5728\u5199\u56DE\u590D"
   ])).has(value);
+}
+function formatToolDisplayName(toolName) {
+  if (toolName === "skill_view") {
+    return "skill_view";
+  }
+  if (toolName === "skills_list") {
+    return "skills_list";
+  }
+  if (toolName === "skill_manage") {
+    return "skill_manage";
+  }
+  return toolName;
 }
 function formatToolStatusText(toolName, status) {
   if (toolName === "skill_view") {
