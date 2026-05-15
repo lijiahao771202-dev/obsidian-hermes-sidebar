@@ -1273,3 +1273,237 @@
 		transition-duration: 0.001ms !important;
 	}
 }
+
+.hermes-inline-toolbar {
+	position: fixed;
+	z-index: 1000;
+	display: none;
+	align-items: center;
+	gap: 4px;
+	max-width: min(calc(100vw - 24px), 680px);
+	padding: 5px;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 74%, transparent);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+	box-shadow:
+		0 16px 42px rgba(15, 23, 42, 0.14),
+		0 2px 8px rgba(15, 23, 42, 0.08);
+	backdrop-filter: blur(18px) saturate(1.35);
+	overflow-x: auto;
+	white-space: nowrap;
+}
+
+.hermes-inline-toolbar.is-visible {
+	display: inline-flex;
+}
+
+.hermes-inline-toolbar::before {
+	content: "Hermes";
+	display: inline-flex;
+	align-items: center;
+	min-height: 28px;
+	padding: 0 9px;
+	border-right: 1px solid color-mix(in srgb, var(--background-modifier-border) 72%, transparent);
+	color: var(--text-muted);
+	font-size: 11px;
+	font-weight: 760;
+	line-height: 1;
+}
+
+.hermes-inline-toolbar-button {
+	border: 0;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--text-normal);
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 680;
+	line-height: 1;
+	min-height: 28px;
+	padding: 0 10px;
+	transition:
+		background-color 140ms ease,
+		color 140ms ease,
+		transform 140ms ease;
+}
+
+.hermes-inline-toolbar-button:hover {
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-secondary));
+	color: var(--text-normal);
+	transform: translateY(-1px);
+}
+
+.hermes-inline-toolbar-button:focus-visible,
+.hermes-inline-control:focus-visible,
+.hermes-inline-followup-input:focus-visible {
+	outline: 2px solid color-mix(in srgb, var(--interactive-accent) 58%, transparent);
+	outline-offset: 2px;
+}
+
+.hermes-inline-original {
+	border-radius: 5px;
+	background: color-mix(in srgb, var(--text-error) 9%, transparent);
+	color: color-mix(in srgb, var(--text-muted) 82%, var(--text-error));
+	text-decoration: line-through;
+	text-decoration-thickness: 1.5px;
+	text-decoration-color: color-mix(in srgb, var(--text-error) 72%, var(--text-muted));
+}
+
+.hermes-inline-proposal {
+	display: inline-grid;
+	max-width: min(720px, calc(100% - 8px));
+	margin: 2px 3px;
+	vertical-align: baseline;
+	gap: 8px;
+}
+
+.hermes-inline-new-text,
+.hermes-inline-loading,
+.hermes-inline-error {
+	display: inline-block;
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 34%, var(--background-modifier-border));
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+	color: var(--text-normal);
+	font-size: 0.96em;
+	line-height: 1.58;
+	padding: 4px 8px;
+	white-space: pre-wrap;
+	word-break: break-word;
+	box-shadow: 0 6px 18px color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+}
+
+.hermes-inline-loading {
+	color: var(--text-muted);
+	background: color-mix(in srgb, var(--background-secondary) 72%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--background-modifier-border) 78%, transparent);
+}
+
+.hermes-inline-error {
+	color: var(--text-error);
+	background: color-mix(in srgb, var(--text-error) 8%, var(--background-primary));
+	border-color: color-mix(in srgb, var(--text-error) 26%, var(--background-modifier-border));
+}
+
+.hermes-inline-controls {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	flex-wrap: wrap;
+}
+
+.hermes-inline-control {
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+	border-radius: 7px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 680;
+	line-height: 1;
+	min-height: 28px;
+	padding: 0 10px;
+	transition:
+		background-color 140ms ease,
+		border-color 140ms ease,
+		color 140ms ease,
+		transform 140ms ease;
+}
+
+.hermes-inline-control:hover {
+	border-color: color-mix(in srgb, var(--interactive-accent) 28%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+	color: var(--text-normal);
+	transform: translateY(-1px);
+}
+
+.hermes-inline-control.is-accept {
+	border-color: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 88%, var(--text-normal) 12%);
+	color: var(--text-on-accent);
+}
+
+.hermes-inline-followup {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: min(320px, 100%);
+	margin: 0;
+}
+
+.hermes-inline-followup-input {
+	min-width: 160px;
+	max-width: 280px;
+	min-height: 28px;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+	border-radius: 7px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: 12px;
+	line-height: 1.2;
+	padding: 0 9px;
+}
+
+.hermes-inline-tooltip {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	max-width: min(620px, calc(100vw - 28px));
+	padding: 6px;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 74%, transparent);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--background-primary) 90%, transparent);
+	box-shadow:
+		0 16px 42px rgba(15, 23, 42, 0.14),
+		0 2px 8px rgba(15, 23, 42, 0.08);
+	backdrop-filter: blur(18px) saturate(1.35);
+}
+
+.hermes-inline-tooltip-status {
+	color: var(--text-muted);
+	font-size: 12px;
+	font-weight: 680;
+	padding: 0 7px;
+}
+
+.suggestion-item .hermes-inline-suggest-item {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+	padding: 3px 0;
+}
+
+.hermes-inline-suggest-title {
+	color: var(--text-normal);
+	font-size: 13px;
+	font-weight: 720;
+	line-height: 1.25;
+}
+
+.hermes-inline-suggest-desc {
+	color: var(--text-muted);
+	font-size: 11px;
+	line-height: 1.35;
+	white-space: normal;
+}
+
+@media (max-width: 640px) {
+	.hermes-inline-toolbar {
+		left: 12px !important;
+		max-width: calc(100vw - 24px);
+	}
+
+	.hermes-inline-proposal {
+		max-width: calc(100vw - 32px);
+	}
+
+	.hermes-inline-followup {
+		width: 100%;
+	}
+
+	.hermes-inline-followup-input {
+		flex: 1 1 140px;
+		min-width: 0;
+	}
+}

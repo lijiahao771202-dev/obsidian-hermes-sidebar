@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => main_default
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 var import_node_child_process = require("node:child_process");
 var import_node_fs = require("node:fs");
 var import_node_os = require("node:os");
@@ -207,6 +207,784 @@ ${context.content}`).join("\n\n");
   ].filter(Boolean).join("\n\n");
 }
 
+// src/inline-edit.ts
+var import_obsidian = require("obsidian");
+var import_state = require("@codemirror/state");
+var import_view = require("@codemirror/view");
+
+// src/inline-edit-helpers.ts
+var INLINE_EDIT_ACTIONS = [
+  {
+    id: "polish",
+    label: "\u6DA6\u8272",
+    shortLabel: "\u6DA6\u8272",
+    description: "\u4FDD\u6301\u539F\u610F\uFF0C\u8BA9\u6587\u5B57\u66F4\u81EA\u7136\u9AD8\u7EA7\u3002",
+    mode: "replace",
+    keywords: ["\u6DA6\u8272", "polish", "rewrite", "\u6539\u5199"]
+  },
+  {
+    id: "clarify",
+    label: "\u6539\u6E05\u695A",
+    shortLabel: "\u6E05\u695A",
+    description: "\u6D88\u9664\u542B\u6DF7\u8868\u8FBE\uFF0C\u8BA9\u903B\u8F91\u66F4\u76F4\u767D\u3002",
+    mode: "replace",
+    keywords: ["\u6E05\u695A", "clarify", "\u903B\u8F91", "\u8868\u8FBE"]
+  },
+  {
+    id: "shorten",
+    label: "\u6539\u77ED",
+    shortLabel: "\u6539\u77ED",
+    description: "\u538B\u7F29\u5197\u4F59\uFF0C\u4FDD\u7559\u91CD\u70B9\u3002",
+    mode: "replace",
+    keywords: ["\u77ED", "short", "\u7CBE\u7B80", "\u538B\u7F29"]
+  },
+  {
+    id: "translate",
+    label: "\u7FFB\u8BD1",
+    shortLabel: "\u7FFB\u8BD1",
+    description: "\u5728\u4E2D\u82F1\u6587\u4E4B\u95F4\u81EA\u7136\u7FFB\u8BD1\u3002",
+    mode: "replace",
+    keywords: ["\u7FFB\u8BD1", "translate", "english", "\u4E2D\u6587"]
+  },
+  {
+    id: "wiki-link",
+    label: "\u52A0\u5165 Wiki \u94FE\u63A5",
+    shortLabel: "Wiki",
+    description: "\u81EA\u7136\u7A7F\u63D2 Obsidian Wiki \u94FE\u63A5\u3002",
+    mode: "replace",
+    keywords: ["wiki", "\u94FE\u63A5", "\u53CC\u94FE", "link"]
+  },
+  {
+    id: "continue",
+    label: "\u7EED\u5199",
+    shortLabel: "\u7EED\u5199",
+    description: "\u6CBF\u7740\u5F53\u524D\u8BED\u6C14\u7EE7\u7EED\u5199\u4E0B\u53BB\u3002",
+    mode: "insert",
+    keywords: ["\u7EED\u5199", "continue", "\u63A5\u7740\u5199"]
+  },
+  {
+    id: "summarize",
+    label: "\u603B\u7ED3",
+    shortLabel: "\u603B\u7ED3",
+    description: "\u63D0\u70BC\u6210\u53EF\u76F4\u63A5\u653E\u5165\u7B14\u8BB0\u7684\u6458\u8981\u3002",
+    mode: "insert",
+    keywords: ["\u603B\u7ED3", "summary", "\u6458\u8981"]
+  },
+  {
+    id: "outline",
+    label: "\u751F\u6210\u5927\u7EB2",
+    shortLabel: "\u5927\u7EB2",
+    description: "\u6839\u636E\u5F53\u524D\u7B14\u8BB0\u751F\u6210\u7ED3\u6784\u5316\u5927\u7EB2\u3002",
+    mode: "note",
+    keywords: ["\u5927\u7EB2", "outline", "\u7ED3\u6784"]
+  },
+  {
+    id: "title",
+    label: "\u63D0\u70BC\u6807\u9898",
+    shortLabel: "\u6807\u9898",
+    description: "\u751F\u6210\u51E0\u4E2A\u53EF\u63D2\u5165\u7684\u6807\u9898\u5019\u9009\u3002",
+    mode: "note",
+    keywords: ["\u6807\u9898", "title", "\u547D\u540D"]
+  }
+];
+function getInlineEditAction(actionId) {
+  return INLINE_EDIT_ACTIONS.find((action) => action.id === actionId);
+}
+function parseSlashTrigger(line, cursorCh) {
+  const beforeCursor = line.slice(0, cursorCh);
+  const match = beforeCursor.match(/(?:^|\s)\/([\p{L}\p{N}\p{Script=Han}_-]*)$/u);
+  if (!match || match.index === void 0) {
+    return null;
+  }
+  const prefix = beforeCursor.slice(0, match.index + match[0].lastIndexOf("/"));
+  if (prefix.endsWith("http:/") || prefix.endsWith("https:/")) {
+    return null;
+  }
+  return {
+    query: match[1] ?? "",
+    fromCh: match.index + match[0].lastIndexOf("/")
+  };
+}
+function filterInlineEditActions(query, actions = INLINE_EDIT_ACTIONS) {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return actions;
+  }
+  return actions.filter(
+    (action) => [action.label, action.shortLabel, action.description, ...action.keywords].join(" ").toLowerCase().includes(normalized)
+  );
+}
+function isContinuousSelection(selections) {
+  return selections.length === 1 && comparePositions(selections[0].anchor, selections[0].head) !== 0;
+}
+function getParagraphRangeAtCursor(lines, cursor) {
+  const boundedLine = Math.min(Math.max(cursor.line, 0), Math.max(lines.length - 1, 0));
+  let startLine = boundedLine;
+  let endLine = boundedLine;
+  while (startLine > 0 && lines[startLine - 1]?.trim()) {
+    startLine -= 1;
+  }
+  while (endLine < lines.length - 1 && lines[endLine + 1]?.trim()) {
+    endLine += 1;
+  }
+  const text = lines.slice(startLine, endLine + 1).join("\n");
+  return {
+    from: { line: startLine, ch: 0 },
+    to: { line: endLine, ch: lines[endLine]?.length ?? 0 },
+    text
+  };
+}
+function buildInlineEditPrompt(input) {
+  const instruction = getActionInstruction(input.action);
+  const targetLabel = input.action.mode === "note" ? "\u5F53\u524D\u7B14\u8BB0" : "\u76EE\u6807\u6587\u672C";
+  const parts = [
+    "\u4F60\u662F Obsidian \u91CC\u7684 Hermes inline edit\u3002\u53EA\u8FD4\u56DE\u53EF\u4EE5\u76F4\u63A5\u5199\u5165\u7B14\u8BB0\u7684 Markdown \u6B63\u6587\u3002",
+    "\u4E0D\u8981\u5BD2\u6684\uFF0C\u4E0D\u8981\u89E3\u91CA\uFF0C\u4E0D\u8981\u5305\u88F9\u4EE3\u7801\u5757\uFF0C\u4E0D\u8981\u6DFB\u52A0\u201C\u4EE5\u4E0B\u662F\u201D\u7B49\u524D\u7F00\u3002",
+    instruction,
+    input.noteTitle ? `\u7B14\u8BB0\u6807\u9898\uFF1A${input.noteTitle}` : "",
+    input.noteText ? `## \u5F53\u524D\u7B14\u8BB0
+${input.noteText}` : "",
+    `## ${targetLabel}
+${input.targetText || "(\u5149\u6807\u4F4D\u7F6E\uFF0C\u65E0\u9009\u533A)"}`,
+    input.currentProposal ? `## \u5F53\u524D\u5019\u9009\u7A3F
+${input.currentProposal}` : "",
+    input.followUp ? `## \u8FFD\u95EE\u8981\u6C42
+${input.followUp}` : ""
+  ].filter(Boolean);
+  return parts.join("\n\n");
+}
+function transitionInlineDraft(draft, event, payload = {}) {
+  if (event === "cancel") {
+    return { state: null, reason: payload.message };
+  }
+  if (payload.requestId !== void 0 && payload.requestId !== draft.requestId) {
+    return { state: draft, reason: "stale-request" };
+  }
+  if (event === "error") {
+    return {
+      state: { ...draft, status: "error" },
+      reason: payload.message
+    };
+  }
+  return {
+    state: {
+      ...draft,
+      status: "ready",
+      proposedText: payload.proposedText ?? draft.proposedText
+    }
+  };
+}
+function comparePositions(left, right) {
+  if (left.line !== right.line) {
+    return left.line - right.line;
+  }
+  return left.ch - right.ch;
+}
+function getActionInstruction(action) {
+  switch (action.id) {
+    case "polish":
+      return "\u4EFB\u52A1\uFF1A\u6DA6\u8272\u76EE\u6807\u6587\u672C\uFF0C\u4FDD\u6301\u539F\u610F\u548C\u4FE1\u606F\u5BC6\u5EA6\uFF0C\u8BA9\u8868\u8FBE\u66F4\u81EA\u7136\u3001\u6709\u8D28\u611F\u3002";
+    case "clarify":
+      return "\u4EFB\u52A1\uFF1A\u628A\u76EE\u6807\u6587\u672C\u6539\u5F97\u66F4\u6E05\u695A\uFF0C\u8865\u8DB3\u5FC5\u8981\u8FDE\u63A5\u8BCD\uFF0C\u53BB\u6389\u542B\u6DF7\u548C\u7ED5\u5F2F\u3002";
+    case "shorten":
+      return "\u4EFB\u52A1\uFF1A\u538B\u7F29\u76EE\u6807\u6587\u672C\uFF0C\u5220\u6389\u91CD\u590D\u548C\u7A7A\u8BDD\uFF0C\u4F46\u4FDD\u7559\u6838\u5FC3\u610F\u601D\u3002";
+    case "translate":
+      return "\u4EFB\u52A1\uFF1A\u7FFB\u8BD1\u76EE\u6807\u6587\u672C\u3002\u4E2D\u6587\u7FFB\u6210\u81EA\u7136\u82F1\u6587\uFF0C\u82F1\u6587\u7FFB\u6210\u81EA\u7136\u4E2D\u6587\u3002";
+    case "wiki-link":
+      return "\u4EFB\u52A1\uFF1A\u5728\u76EE\u6807\u6587\u672C\u4E2D\u81EA\u7136\u7A7F\u63D2 Obsidian Wiki \u94FE\u63A5\uFF0C\u683C\u5F0F\u4F7F\u7528 [[\u6982\u5FF5]]\uFF0C\u4E0D\u8981\u4E3A\u4E86\u94FE\u63A5\u800C\u7834\u574F\u53E5\u5B50\u3002";
+    case "continue":
+      return "\u4EFB\u52A1\uFF1A\u6CBF\u7740\u76EE\u6807\u6587\u672C\u6216\u5149\u6807\u524D\u4E0A\u4E0B\u6587\u7EED\u5199\u4E00\u5C0F\u6BB5\uFF0C\u8BED\u6C14\u548C\u7ED3\u6784\u4FDD\u6301\u4E00\u81F4\u3002";
+    case "summarize":
+      return "\u4EFB\u52A1\uFF1A\u628A\u76EE\u6807\u6587\u672C\u6216\u5F53\u524D\u6BB5\u843D\u603B\u7ED3\u6210\u9002\u5408\u63D2\u5165\u7B14\u8BB0\u7684 Markdown \u6458\u8981\u3002";
+    case "outline":
+      return "\u4EFB\u52A1\uFF1A\u6839\u636E\u5F53\u524D\u7B14\u8BB0\u751F\u6210\u7ED3\u6784\u5316 Markdown \u5927\u7EB2\uFF0C\u53EA\u8F93\u51FA\u5927\u7EB2\u6B63\u6587\u3002";
+    case "title":
+      return "\u4EFB\u52A1\uFF1A\u6839\u636E\u5F53\u524D\u7B14\u8BB0\u63D0\u70BC 5 \u4E2A\u6807\u9898\u5019\u9009\uFF0C\u7528 Markdown \u5217\u8868\u8F93\u51FA\uFF0C\u4E0D\u8981\u91CD\u547D\u540D\u6587\u4EF6\u3002";
+    default:
+      return `\u4EFB\u52A1\uFF1A${action.description}`;
+  }
+}
+
+// src/inline-edit.ts
+var setInlineEditDraftEffect = import_state.StateEffect.define();
+var inlineEditDraftField = import_state.StateField.define({
+  create: () => null,
+  update(value, transaction) {
+    let next = value;
+    for (const effect of transaction.effects) {
+      if (effect.is(setInlineEditDraftEffect)) {
+        next = effect.value;
+      }
+    }
+    if (next?.draft && transaction.docChanged) {
+      const from = transaction.changes.mapPos(next.draft.fromOffset, -1);
+      const to = transaction.changes.mapPos(next.draft.toOffset, 1);
+      next = {
+        ...next,
+        anchor: transaction.changes.mapPos(next.anchor, 1),
+        draft: {
+          ...next.draft,
+          fromOffset: from,
+          toOffset: to
+        }
+      };
+    }
+    return next;
+  },
+  provide: (field) => import_view.showTooltip.from(field, (value) => value?.draft?.status === "generating" ? buildInlineEditTooltip(value) : null)
+});
+var inlineEditDecorationPlugin = import_view.ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = buildInlineEditDecorations(view);
+    }
+    update(update) {
+      if (update.docChanged || update.viewportChanged || update.transactions.some((transaction) => transaction.effects.length > 0)) {
+        this.decorations = buildInlineEditDecorations(update.view);
+      }
+    }
+  },
+  {
+    decorations: (value) => value.decorations
+  }
+);
+function createInlineEditExtension() {
+  return [inlineEditDraftField, inlineEditDecorationPlugin];
+}
+var InlineEditManager = class {
+  constructor(options) {
+    this.currentView = null;
+    this.currentContext = null;
+    this.currentDraft = null;
+    this.currentCancel = null;
+    this.requestCounter = 0;
+    this.selectionToolbarEl = null;
+    this.selectionToolbarTimer = null;
+    this.lastMultiSelectionNoticeAt = 0;
+    this.options = options;
+    this.slashSuggest = new HermesInlineSlashSuggest(options.app, this);
+    options.plugin.registerEditorSuggest(this.slashSuggest);
+    options.plugin.registerEditorExtension(createInlineEditExtension());
+    options.plugin.registerDomEvent(document, "selectionchange", () => this.scheduleSelectionToolbar());
+    options.plugin.registerDomEvent(document, "pointerup", () => this.scheduleSelectionToolbar());
+    options.plugin.registerDomEvent(document, "keydown", (event) => {
+      if (event.key === "Escape") {
+        this.cancelDraft();
+        this.hideSelectionToolbar();
+      }
+    });
+    options.plugin.registerEvent(
+      options.app.workspace.on("active-leaf-change", () => {
+        this.cancelDraft();
+        this.hideSelectionToolbar();
+      })
+    );
+    options.plugin.registerEvent(
+      options.app.workspace.on("file-open", () => {
+        this.cancelDraft();
+        this.hideSelectionToolbar();
+      })
+    );
+    options.plugin.registerEvent(
+      options.app.workspace.on("editor-change", (editor, info) => {
+        this.syncCurrentDraftFromView();
+        if (this.currentDraft && this.currentContext?.editor === editor && !this.isOriginalTextStillPresent(editor)) {
+          this.cancelDraft("\u539F\u6587\u5DF2\u88AB\u4FEE\u6539\uFF0C\u8BF7\u91CD\u65B0\u751F\u6210\u3002");
+        }
+        if (!(info instanceof import_obsidian.MarkdownView)) {
+          this.hideSelectionToolbar();
+        }
+      })
+    );
+  }
+  destroy() {
+    this.cancelDraft();
+    this.hideSelectionToolbar();
+    if (this.selectionToolbarTimer !== null) {
+      window.clearTimeout(this.selectionToolbarTimer);
+      this.selectionToolbarTimer = null;
+    }
+  }
+  getSlashSuggestions(query) {
+    return filterInlineEditActions(query);
+  }
+  async runSlashAction(action, context) {
+    context.editor.replaceRange("", context.start, context.end, "+hermes-inline-slash");
+    const markdownView = this.options.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (!markdownView || markdownView.editor !== context.editor || !context.file) {
+      new import_obsidian.Notice("Hermes inline edit \u53EA\u80FD\u5728\u5F53\u524D Markdown \u7F16\u8F91\u5668\u91CC\u4F7F\u7528\u3002");
+      return;
+    }
+    const cursor = context.start;
+    const requestContext = this.buildRequestContextFromCursor(action, context.editor, markdownView, context.file, cursor);
+    await this.startRequest(requestContext);
+  }
+  async runSelectionAction(actionId) {
+    const action = getInlineEditAction(actionId);
+    const selectionContext = this.getSelectionContext();
+    if (!action || !selectionContext) {
+      return;
+    }
+    this.hideSelectionToolbar();
+    const requestContext = this.buildRequestContextFromSelection(action, selectionContext);
+    await this.startRequest(requestContext);
+  }
+  scheduleSelectionToolbar() {
+    if (this.selectionToolbarTimer !== null) {
+      window.clearTimeout(this.selectionToolbarTimer);
+    }
+    this.selectionToolbarTimer = window.setTimeout(() => {
+      this.selectionToolbarTimer = null;
+      this.renderSelectionToolbar();
+    }, 80);
+  }
+  renderSelectionToolbar() {
+    if (this.currentDraft) {
+      this.hideSelectionToolbar();
+      return;
+    }
+    const context = this.getSelectionContext();
+    if (!context) {
+      this.hideSelectionToolbar();
+      return;
+    }
+    if (!this.selectionToolbarEl) {
+      this.selectionToolbarEl = document.body.createDiv({ cls: "hermes-inline-toolbar" });
+      for (const action of INLINE_EDIT_ACTIONS) {
+        const button = this.selectionToolbarEl.createEl("button", {
+          cls: "hermes-inline-toolbar-button",
+          text: action.shortLabel,
+          attr: { type: "button", title: action.description }
+        });
+        button.addEventListener("mousedown", (event) => event.preventDefault());
+        button.addEventListener("click", () => void this.runSelectionAction(action.id));
+      }
+    }
+    const rect = context.view.coordsAtPos(context.toOffset, 1) ?? context.view.coordsAtPos(context.fromOffset, -1);
+    if (!rect) {
+      this.hideSelectionToolbar();
+      return;
+    }
+    this.selectionToolbarEl.style.left = `${Math.max(12, rect.left - 48)}px`;
+    this.selectionToolbarEl.style.top = `${Math.max(12, rect.top - 52)}px`;
+    this.selectionToolbarEl.addClass("is-visible");
+  }
+  hideSelectionToolbar() {
+    this.selectionToolbarEl?.remove();
+    this.selectionToolbarEl = null;
+  }
+  getSelectionContext() {
+    const markdownView = this.options.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (!markdownView || markdownView.getMode() !== "source" || !markdownView.file) {
+      return null;
+    }
+    const editor = markdownView.editor;
+    const selections = editor.listSelections();
+    if (selections.length !== 1) {
+      if (selections.length > 1) {
+        this.noticeMultipleSelections();
+      }
+      return null;
+    }
+    if (!isContinuousSelection(selections)) {
+      return null;
+    }
+    const selection = selections[0];
+    const [from, to] = comparePositions(selection.anchor, selection.head) <= 0 ? [selection.anchor, selection.head] : [selection.head, selection.anchor];
+    const text = editor.getRange(from, to);
+    if (!text.trim()) {
+      return null;
+    }
+    const view = this.findEditorView(markdownView);
+    if (!view) {
+      return null;
+    }
+    return {
+      view,
+      editor,
+      markdownView,
+      file: markdownView.file,
+      from,
+      to,
+      fromOffset: editor.posToOffset(from),
+      toOffset: editor.posToOffset(to),
+      text
+    };
+  }
+  buildRequestContextFromSelection(action, context) {
+    const from = action.mode === "replace" ? context.from : context.to;
+    const to = action.mode === "replace" ? context.to : context.to;
+    return {
+      action,
+      editor: context.editor,
+      markdownView: context.markdownView,
+      file: context.file,
+      from,
+      to,
+      fromOffset: context.editor.posToOffset(from),
+      toOffset: context.editor.posToOffset(to),
+      targetText: context.text,
+      noteText: context.editor.getValue(),
+      noteTitle: context.file.basename,
+      mode: action.mode
+    };
+  }
+  buildRequestContextFromCursor(action, editor, markdownView, file, cursor) {
+    const noteText = editor.getValue();
+    const lines = noteText.split("\n");
+    const paragraph = action.mode === "note" ? null : getParagraphRangeAtCursor(lines, cursor);
+    const mode = action.mode === "replace" ? "replace" : action.mode;
+    const from = action.mode === "insert" || action.mode === "note" ? cursor : paragraph?.from ?? cursor;
+    const to = action.mode === "insert" || action.mode === "note" ? cursor : paragraph?.to ?? cursor;
+    return {
+      action,
+      editor,
+      markdownView,
+      file,
+      from,
+      to,
+      fromOffset: editor.posToOffset(from),
+      toOffset: editor.posToOffset(to),
+      targetText: action.mode === "note" ? noteText : paragraph?.text ?? "",
+      noteText,
+      noteTitle: file.basename,
+      mode
+    };
+  }
+  async startRequest(context) {
+    this.cancelDraft();
+    const view = this.findEditorView(context.markdownView);
+    if (!view) {
+      new import_obsidian.Notice("\u6CA1\u6709\u627E\u5230\u5F53\u524D\u7F16\u8F91\u5668\u89C6\u56FE\u3002");
+      return;
+    }
+    const requestId = ++this.requestCounter;
+    const draft = {
+      actionId: context.action.id,
+      filePath: context.file.path,
+      fromOffset: context.fromOffset,
+      toOffset: context.toOffset,
+      originalText: context.targetText,
+      proposedText: "",
+      status: "generating",
+      requestId
+    };
+    this.currentView = view;
+    this.currentContext = context;
+    this.currentDraft = draft;
+    this.pushDraftToView();
+    const settings = this.options.getSettings();
+    const prompt = buildInlineEditPrompt({
+      action: context.action,
+      targetText: context.action.mode === "note" ? "" : context.targetText,
+      noteText: context.action.mode === "note" ? context.noteText : void 0,
+      noteTitle: context.noteTitle,
+      followUp: context.followUp,
+      currentProposal: context.currentProposal
+    });
+    const run = this.options.run({
+      prompt,
+      systemPrompt: buildInlineSystemPrompt(settings.systemPrompt),
+      provider: settings.provider,
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort
+    });
+    this.currentCancel = run.cancel;
+    try {
+      const result = await run.promise;
+      if (!this.currentDraft || this.currentDraft.requestId !== requestId) {
+        return;
+      }
+      const next = transitionInlineDraft(this.currentDraft, "ready", {
+        requestId,
+        proposedText: cleanInlineProposal(result.text)
+      }).state;
+      this.currentDraft = next;
+      this.pushDraftToView();
+    } catch (error) {
+      if (!this.currentDraft || this.currentDraft.requestId !== requestId) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const next = transitionInlineDraft(this.currentDraft, "error", { requestId, message }).state;
+      this.currentDraft = next;
+      this.pushDraftToView();
+      new import_obsidian.Notice(`Hermes inline edit \u5931\u8D25\uFF1A${message}`);
+    } finally {
+      if (this.currentDraft?.requestId === requestId) {
+        this.currentCancel = null;
+      }
+    }
+  }
+  acceptDraft() {
+    if (!this.currentDraft || !this.currentContext) {
+      return;
+    }
+    const proposed = this.currentDraft.proposedText.trim();
+    if (!proposed) {
+      new import_obsidian.Notice("\u6CA1\u6709\u53EF\u63A5\u53D7\u7684 AI \u7ED3\u679C\u3002");
+      return;
+    }
+    if (!this.isOriginalTextStillPresent(this.currentContext.editor)) {
+      this.cancelDraft("\u539F\u6587\u5DF2\u53D8\u5316\uFF0C\u5DF2\u53D6\u6D88\u8FD9\u6B21\u9884\u89C8\u3002");
+      return;
+    }
+    const editor = this.currentContext.editor;
+    const from = editor.offsetToPos(this.currentDraft.fromOffset);
+    const to = editor.offsetToPos(this.currentDraft.toOffset);
+    this.clearDraft();
+    editor.replaceRange(proposed, from, to, "+hermes-inline-accept");
+  }
+  cancelDraft(message) {
+    if (this.currentCancel) {
+      this.currentCancel();
+      this.currentCancel = null;
+    }
+    this.clearDraft();
+    if (message) {
+      new import_obsidian.Notice(message);
+    }
+  }
+  retryDraft() {
+    if (!this.currentContext) {
+      return;
+    }
+    void this.startRequest({ ...this.currentContext, currentProposal: this.currentDraft?.proposedText });
+  }
+  followUpDraft(text) {
+    if (!this.currentContext || !text.trim()) {
+      return;
+    }
+    void this.startRequest({
+      ...this.currentContext,
+      followUp: text.trim(),
+      currentProposal: this.currentDraft?.proposedText
+    });
+  }
+  clearDraft() {
+    this.currentDraft = null;
+    this.currentContext = null;
+    this.currentCancel = null;
+    this.pushDraftToView();
+    this.currentView = null;
+  }
+  pushDraftToView() {
+    if (!this.currentView) {
+      return;
+    }
+    const draft = this.currentDraft;
+    this.currentView.dispatch({
+      effects: setInlineEditDraftEffect.of(
+        draft ? {
+          draft,
+          anchor: draft.toOffset,
+          onAccept: () => this.acceptDraft(),
+          onCancel: () => this.cancelDraft(),
+          onRetry: () => this.retryDraft(),
+          onFollowUp: (text) => this.followUpDraft(text)
+        } : null
+      )
+    });
+  }
+  findEditorView(markdownView) {
+    try {
+      const editorWithCm = markdownView.editor;
+      const state = editorWithCm.cm?.state;
+      const view = state?.field ? state.field(import_obsidian.editorEditorField, false) : null;
+      if (view instanceof import_view.EditorView) {
+        return view;
+      }
+    } catch {
+    }
+    const editorEl = markdownView.containerEl.querySelector(".cm-editor");
+    return editorEl instanceof HTMLElement ? import_view.EditorView.findFromDOM(editorEl) : null;
+  }
+  syncCurrentDraftFromView() {
+    if (!this.currentView || !this.currentDraft) {
+      return;
+    }
+    const payload = this.currentView.state.field(inlineEditDraftField, false);
+    if (payload?.draft?.requestId === this.currentDraft.requestId) {
+      this.currentDraft = payload.draft;
+    }
+  }
+  isOriginalTextStillPresent(editor) {
+    if (!this.currentDraft || this.currentContext?.mode === "insert" || this.currentContext?.mode === "note") {
+      return true;
+    }
+    const from = editor.offsetToPos(this.currentDraft.fromOffset);
+    const to = editor.offsetToPos(this.currentDraft.toOffset);
+    return editor.getRange(from, to) === this.currentDraft.originalText;
+  }
+  noticeMultipleSelections() {
+    const now = Date.now();
+    if (now - this.lastMultiSelectionNoticeAt < 2400) {
+      return;
+    }
+    this.lastMultiSelectionNoticeAt = now;
+    new import_obsidian.Notice("\u8BF7\u9009\u62E9\u4E00\u6BB5\u8FDE\u7EED\u6587\u672C\u3002");
+  }
+};
+var HermesInlineSlashSuggest = class extends import_obsidian.EditorSuggest {
+  constructor(app, manager) {
+    super(app);
+    this.manager = manager;
+    this.limit = 9;
+  }
+  onTrigger(cursor, editor, file) {
+    if (!file) {
+      return null;
+    }
+    const trigger = parseSlashTrigger(editor.getLine(cursor.line), cursor.ch);
+    if (!trigger) {
+      return null;
+    }
+    return {
+      start: { line: cursor.line, ch: trigger.fromCh },
+      end: cursor,
+      query: trigger.query
+    };
+  }
+  getSuggestions(context) {
+    return this.manager.getSlashSuggestions(context.query);
+  }
+  renderSuggestion(value, el) {
+    el.addClass("hermes-inline-suggest-item");
+    el.createDiv({ cls: "hermes-inline-suggest-title", text: value.label });
+    el.createDiv({ cls: "hermes-inline-suggest-desc", text: value.description });
+  }
+  selectSuggestion(value) {
+    if (!this.context) {
+      return;
+    }
+    void this.manager.runSlashAction(value, this.context);
+  }
+};
+var InlineProposalWidget = class _InlineProposalWidget extends import_view.WidgetType {
+  constructor(payload) {
+    super();
+    this.payload = payload;
+  }
+  eq(other) {
+    return other instanceof _InlineProposalWidget && other.payload.draft === this.payload.draft;
+  }
+  toDOM() {
+    const draft = this.payload.draft;
+    const root = document.createElement("span");
+    root.className = `hermes-inline-proposal is-${draft?.status ?? "idle"}`;
+    if (!draft) {
+      return root;
+    }
+    if (draft.status === "generating") {
+      root.createSpan({ cls: "hermes-inline-loading", text: "Hermes \u6B63\u5728\u751F\u6210..." });
+      return root;
+    }
+    if (draft.status === "error") {
+      root.createSpan({ cls: "hermes-inline-error", text: "\u751F\u6210\u5931\u8D25" });
+      appendInlineControls(root, this.payload, true);
+      return root;
+    }
+    root.createSpan({ cls: "hermes-inline-new-text", text: draft.proposedText || "(\u7A7A\u7ED3\u679C)" });
+    appendInlineControls(root, this.payload, false);
+    return root;
+  }
+};
+function buildInlineEditDecorations(view) {
+  const payload = view.state.field(inlineEditDraftField, false);
+  if (!payload?.draft) {
+    return import_view.Decoration.none;
+  }
+  const ranges = [];
+  const draft = payload.draft;
+  if (draft.status !== "generating" && draft.originalText && draft.fromOffset !== draft.toOffset) {
+    ranges.push(
+      import_view.Decoration.mark({
+        class: "hermes-inline-original"
+      }).range(draft.fromOffset, draft.toOffset)
+    );
+  }
+  ranges.push(
+    import_view.Decoration.widget({
+      widget: new InlineProposalWidget(payload),
+      side: 1
+    }).range(payload.anchor)
+  );
+  return import_view.Decoration.set(ranges, true);
+}
+function buildInlineEditTooltip(payload) {
+  return {
+    pos: payload.anchor,
+    above: true,
+    clip: false,
+    create() {
+      const dom = document.createElement("div");
+      dom.className = `hermes-inline-tooltip is-${payload.draft?.status ?? "idle"}`;
+      if (payload.draft?.status === "generating") {
+        dom.createSpan({ cls: "hermes-inline-tooltip-status", text: "\u751F\u6210\u4E2D" });
+        return { dom };
+      }
+      if (payload.draft?.status === "error") {
+        dom.createSpan({ cls: "hermes-inline-tooltip-status", text: "\u751F\u6210\u5931\u8D25" });
+      }
+      appendInlineControls(dom, payload, payload.draft?.status === "error");
+      return { dom };
+    }
+  };
+}
+function appendInlineControls(root, payload, errorOnly) {
+  const controls = root.createSpan({ cls: "hermes-inline-controls" });
+  if (!errorOnly) {
+    const accept = controls.createEl("button", {
+      cls: "hermes-inline-control is-accept",
+      text: "\u63A5\u53D7",
+      attr: { type: "button" }
+    });
+    accept.addEventListener("mousedown", (event) => event.preventDefault());
+    accept.addEventListener("click", payload.onAccept);
+  }
+  const cancel = controls.createEl("button", {
+    cls: "hermes-inline-control",
+    text: "\u64A4\u9500",
+    attr: { type: "button" }
+  });
+  cancel.addEventListener("mousedown", (event) => event.preventDefault());
+  cancel.addEventListener("click", payload.onCancel);
+  const retry = controls.createEl("button", {
+    cls: "hermes-inline-control",
+    text: "\u91CD\u8BD5",
+    attr: { type: "button" }
+  });
+  retry.addEventListener("mousedown", (event) => event.preventDefault());
+  retry.addEventListener("click", payload.onRetry);
+  if (!errorOnly) {
+    const follow = controls.createEl("form", { cls: "hermes-inline-followup" });
+    const input = follow.createEl("input", {
+      type: "text",
+      placeholder: "\u8FFD\u95EE\uFF1A\u518D\u77ED\u4E00\u70B9...",
+      cls: "hermes-inline-followup-input"
+    });
+    const submit = follow.createEl("button", {
+      cls: "hermes-inline-control is-followup",
+      text: "\u8FFD\u95EE",
+      attr: { type: "submit" }
+    });
+    submit.addEventListener("mousedown", (event) => event.preventDefault());
+    follow.addEventListener("submit", (event) => {
+      event.preventDefault();
+      payload.onFollowUp(input.value);
+    });
+  }
+}
+function buildInlineSystemPrompt(basePrompt) {
+  return [
+    basePrompt.trim(),
+    "You are Hermes inline edit inside Obsidian. Return only the replacement or insertion Markdown. No explanations, no code fences, no chat preface."
+  ].filter(Boolean).join("\n\n");
+}
+function cleanInlineProposal(text) {
+  return text.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/i, "").trim();
+}
+
 // src/main.ts
 var VIEW_TYPE_HERMES_SIDEBAR = "hermes-sidebar-view";
 var DEFAULT_HERMES_BINARY = "hermes";
@@ -255,9 +1033,10 @@ var DEFAULT_SETTINGS = {
   systemPrompt: "You are Hermes inside Obsidian. Be concise, context-aware, and helpful with note-writing tasks.",
   pathPrefix: DEFAULT_HERMES_PATH_PREFIX
 };
-var HermesSidebarPlugin = class extends import_obsidian.Plugin {
+var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
   constructor() {
     super(...arguments);
+    this.inlineEditManager = null;
     this.selectionSnapshot = "";
     this.refreshTimer = null;
     this.isPointerSelecting = false;
@@ -268,6 +1047,17 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
   }
   async onload() {
     await this.loadSettings();
+    this.inlineEditManager = new InlineEditManager({
+      plugin: this,
+      app: this.app,
+      getSettings: () => ({
+        provider: this.settings.provider,
+        model: this.settings.model,
+        reasoningEffort: this.settings.reasoningEffort,
+        systemPrompt: this.settings.systemPrompt
+      }),
+      run: (input) => runInlineHermesBridge(this, input)
+    });
     this.registerView(VIEW_TYPE_HERMES_SIDEBAR, (leaf) => new HermesSidebarView(leaf, this));
     this.addRibbonIcon("messages-square", "Open Hermes Sidebar", async () => {
       await this.activateView();
@@ -285,7 +1075,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
       callback: async () => {
         const selection = this.getCurrentSelectionText();
         if (!selection) {
-          new import_obsidian.Notice("No selected text found in the active note.");
+          new import_obsidian2.Notice("No selected text found in the active note.");
           return;
         }
         const sidebar = await this.activateView();
@@ -298,7 +1088,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
     this.addSettingTab(new HermesSidebarSettingTab(this.app, this));
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
-        const markdownView = leaf?.view instanceof import_obsidian.MarkdownView ? leaf.view : null;
+        const markdownView = leaf?.view instanceof import_obsidian2.MarkdownView ? leaf.view : null;
         if (!markdownView) {
           return;
         }
@@ -350,6 +1140,8 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
     });
   }
   async onunload() {
+    this.inlineEditManager?.destroy();
+    this.inlineEditManager = null;
     await this.app.workspace.detachLeavesOfType(VIEW_TYPE_HERMES_SIDEBAR);
   }
   async loadSettings() {
@@ -364,7 +1156,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
     await this.savePluginState();
   }
   getActiveMarkdownView() {
-    return this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView) ?? null;
+    return this.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView) ?? null;
   }
   getCurrentContextFile() {
     const activeFile = this.app.workspace.getActiveFile();
@@ -372,11 +1164,11 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
       return activeFile;
     }
     const mostRecentLeaf = this.app.workspace.getMostRecentLeaf();
-    if (mostRecentLeaf?.view instanceof import_obsidian.MarkdownView) {
+    if (mostRecentLeaf?.view instanceof import_obsidian2.MarkdownView) {
       return mostRecentLeaf.view.file ?? null;
     }
     const markdownLeaf = this.app.workspace.getLeavesOfType("markdown")[0];
-    if (markdownLeaf?.view instanceof import_obsidian.MarkdownView) {
+    if (markdownLeaf?.view instanceof import_obsidian2.MarkdownView) {
       return markdownLeaf.view.file ?? null;
     }
     return null;
@@ -581,7 +1373,7 @@ var HermesSidebarPlugin = class extends import_obsidian.Plugin {
     return leaf.view;
   }
 };
-var HermesSidebarView = class extends import_obsidian.ItemView {
+var HermesSidebarView = class extends import_obsidian2.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.pendingContexts = [];
@@ -650,7 +1442,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     this.pendingContexts.push(context);
     this.statusText = `\u5DF2\u9644\u52A0 ${context.label.toLowerCase()} \u4E0A\u4E0B\u6587`;
     this.render();
-    new import_obsidian.Notice(`${context.label} attached to Hermes.`);
+    new import_obsidian2.Notice(`${context.label} attached to Hermes.`);
   }
   focusComposerWithoutScroll() {
     if (!this.inputEl) {
@@ -711,7 +1503,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     });
     resetButton.addEventListener("click", () => {
       if (this.isSending) {
-        new import_obsidian.Notice("Stop the current reply before starting a new chat.");
+        new import_obsidian2.Notice("Stop the current reply before starting a new chat.");
         return;
       }
       this.stopActiveRun();
@@ -750,7 +1542,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
       });
       itemButton.addEventListener("click", () => {
         if (this.isSending) {
-          new import_obsidian.Notice("Wait for the current reply to finish before switching chats.");
+          new import_obsidian2.Notice("Wait for the current reply to finish before switching chats.");
           return;
         }
         this.pendingContexts = [];
@@ -769,7 +1561,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
         event.preventDefault();
         event.stopPropagation();
         if (this.isSending && session.id === activeSession.id) {
-          new import_obsidian.Notice("Stop the current run before deleting this chat.");
+          new import_obsidian2.Notice("Stop the current run before deleting this chat.");
           return;
         }
         this.plugin.deleteSession(session.id);
@@ -1307,13 +2099,13 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
   }
   async renderMarkdownInto(container, content) {
     container.empty();
-    await import_obsidian.MarkdownRenderer.render(this.app, content, container, "", this);
+    await import_obsidian2.MarkdownRenderer.render(this.app, content, container, "", this);
     this.scheduleMessagesToBottom();
   }
   async renderStreamingMarkdownInto(container, content) {
     const token = ++this.streamingRenderToken;
     const scratch = document.createElement("div");
-    await import_obsidian.MarkdownRenderer.render(this.app, content, scratch, "", this);
+    await import_obsidian2.MarkdownRenderer.render(this.app, content, scratch, "", this);
     if (token !== this.streamingRenderToken) {
       return;
     }
@@ -1797,7 +2589,7 @@ var HermesSidebarView = class extends import_obsidian.ItemView {
     const text = this.inputEl.value.trim();
     const userText = buildTurnUserText(text, this.pendingImages.length);
     if (!userText) {
-      new import_obsidian.Notice("Type a message or attach an image first.");
+      new import_obsidian2.Notice("Type a message or attach an image first.");
       return;
     }
     this.syncComposerSettingsFromControls();
@@ -1988,7 +2780,7 @@ ${message}`
         this.persistActiveSession();
         this.renderChatMessage(errorMessage);
         this.statusText = "Hermes call failed";
-        new import_obsidian.Notice("Hermes request failed. Check the sidebar for details.");
+        new import_obsidian2.Notice("Hermes request failed. Check the sidebar for details.");
       }
       this.refreshActivityStatus();
     } finally {
@@ -2114,7 +2906,7 @@ ${message}`
     });
   }
 };
-var HermesImagePreviewModal = class extends import_obsidian.Modal {
+var HermesImagePreviewModal = class extends import_obsidian2.Modal {
   constructor(app, attachment) {
     super(app);
     this.attachment = attachment;
@@ -2141,7 +2933,7 @@ var HermesImagePreviewModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var HermesSidebarSettingTab = class extends import_obsidian.PluginSettingTab {
+var HermesSidebarSettingTab = class extends import_obsidian2.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -2150,37 +2942,37 @@ var HermesSidebarSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Hermes Sidebar Settings" });
-    new import_obsidian.Setting(containerEl).setName("Hermes binary").setDesc("Optional explicit Hermes binary path. If left as 'hermes', the PATH prefix below is used.").addText(
+    new import_obsidian2.Setting(containerEl).setName("Hermes binary").setDesc("Optional explicit Hermes binary path. If left as 'hermes', the PATH prefix below is used.").addText(
       (text) => text.setPlaceholder("hermes").setValue(this.plugin.settings.hermesBinary).onChange(async (value) => {
         this.plugin.settings.hermesBinary = value.trim() || DEFAULT_HERMES_BINARY;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Provider").setDesc("Primary Hermes provider for Obsidian chat.").addText(
+    new import_obsidian2.Setting(containerEl).setName("Provider").setDesc("Primary Hermes provider for Obsidian chat.").addText(
       (text) => text.setValue(this.plugin.settings.provider).onChange(async (value) => {
         this.plugin.settings.provider = value.trim() || DEFAULT_PROVIDER;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Model").setDesc("Primary Hermes model for Obsidian chat.").addText(
+    new import_obsidian2.Setting(containerEl).setName("Model").setDesc("Primary Hermes model for Obsidian chat.").addText(
       (text) => text.setValue(this.plugin.settings.model).onChange(async (value) => {
         this.plugin.settings.model = value.trim() || DEFAULT_MODEL;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Reasoning effort").setDesc("Default reasoning strength used by the Obsidian sidebar.").addText(
+    new import_obsidian2.Setting(containerEl).setName("Reasoning effort").setDesc("Default reasoning strength used by the Obsidian sidebar.").addText(
       (text) => text.setValue(this.plugin.settings.reasoningEffort).onChange(async (value) => {
         this.plugin.settings.reasoningEffort = value.trim() || DEFAULT_REASONING_EFFORT;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("PATH prefix").setDesc("Prepended to PATH so Obsidian can resolve the Hermes Python environment.").addTextArea(
+    new import_obsidian2.Setting(containerEl).setName("PATH prefix").setDesc("Prepended to PATH so Obsidian can resolve the Hermes Python environment.").addTextArea(
       (text) => text.setValue(this.plugin.settings.pathPrefix).onChange(async (value) => {
         this.plugin.settings.pathPrefix = value.trim();
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("System prompt").setDesc("A short instruction injected before each turn.").addTextArea(
+    new import_obsidian2.Setting(containerEl).setName("System prompt").setDesc("A short instruction injected before each turn.").addTextArea(
       (text) => text.setValue(this.plugin.settings.systemPrompt).onChange(async (value) => {
         this.plugin.settings.systemPrompt = value.trim();
         await this.plugin.saveSettings();
@@ -2327,6 +3119,20 @@ function runHermesBridge(input) {
       }, 1200);
     }
   };
+}
+function runInlineHermesBridge(plugin, input) {
+  return runHermesBridge({
+    binary: plugin.settings.hermesBinary,
+    bridgeScript: resolveBridgeScriptPath(plugin.app, plugin.manifest.dir ?? ""),
+    hermesRoot: DEFAULT_HERMES_ROOT,
+    prompt: input.prompt,
+    conversationHistory: [],
+    provider: input.provider,
+    model: input.model,
+    reasoningEffort: input.reasoningEffort,
+    systemPrompt: input.systemPrompt,
+    pathPrefix: plugin.settings.pathPrefix
+  });
 }
 function buildHermesSystemPrompt(basePrompt, runtime) {
   const trimmed = basePrompt.trim();

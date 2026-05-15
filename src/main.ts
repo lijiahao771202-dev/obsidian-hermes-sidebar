@@ -35,6 +35,7 @@ import {
 	shouldStickToBottom
 } from "./session-helpers";
 import { buildTurnUserText, composeObsidianPrompt } from "./bridge-helpers";
+import { InlineEditManager, type InlineEditRunInput } from "./inline-edit";
 
 const VIEW_TYPE_HERMES_SIDEBAR = "hermes-sidebar-view";
 const DEFAULT_HERMES_BINARY = "hermes";
@@ -231,6 +232,7 @@ const DEFAULT_SETTINGS: HermesSidebarSettings = {
 
 class HermesSidebarPlugin extends Plugin {
 	settings: HermesSidebarSettings;
+	private inlineEditManager: InlineEditManager | null = null;
 	private selectionSnapshot = "";
 	private refreshTimer: number | null = null;
 	private isPointerSelecting = false;
@@ -241,6 +243,18 @@ class HermesSidebarPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+
+		this.inlineEditManager = new InlineEditManager({
+			plugin: this,
+			app: this.app,
+			getSettings: () => ({
+				provider: this.settings.provider,
+				model: this.settings.model,
+				reasoningEffort: this.settings.reasoningEffort,
+				systemPrompt: this.settings.systemPrompt
+			}),
+			run: (input) => runInlineHermesBridge(this, input)
+		});
 
 		this.registerView(VIEW_TYPE_HERMES_SIDEBAR, (leaf) => new HermesSidebarView(leaf, this));
 
@@ -337,6 +351,8 @@ class HermesSidebarPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		this.inlineEditManager?.destroy();
+		this.inlineEditManager = null;
 		await this.app.workspace.detachLeavesOfType(VIEW_TYPE_HERMES_SIDEBAR);
 	}
 
@@ -2664,6 +2680,21 @@ function runHermesBridge(input: {
 			}, 1200);
 		}
 	};
+}
+
+function runInlineHermesBridge(plugin: HermesSidebarPlugin, input: InlineEditRunInput): HermesBridgeRun {
+	return runHermesBridge({
+		binary: plugin.settings.hermesBinary,
+		bridgeScript: resolveBridgeScriptPath(plugin.app, plugin.manifest.dir ?? ""),
+		hermesRoot: DEFAULT_HERMES_ROOT,
+		prompt: input.prompt,
+		conversationHistory: [],
+		provider: input.provider,
+		model: input.model,
+		reasoningEffort: input.reasoningEffort,
+		systemPrompt: input.systemPrompt,
+		pathPrefix: plugin.settings.pathPrefix
+	});
 }
 
 function buildHermesSystemPrompt(
