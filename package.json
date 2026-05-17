@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production"
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "sync": "node scripts/sync-plugin.mjs",
+    "build:sync": "npm run build && npm run sync",
+    "reload": "obsidian plugin:reload id=hermes-sidebar",
+    "deploy": "npm run build:sync && npm run reload"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

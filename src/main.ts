@@ -8,6 +8,7 @@ import {
 	Notice,
 	Plugin,
 	PluginSettingTab,
+	setIcon,
 	Setting,
 	WorkspaceLeaf
 } from "obsidian";
@@ -20,10 +21,15 @@ import {
 	adjustIndexAfterInsertion,
 	buildSessionTitle,
 	canUpdateBridgeEventWithoutFullRender,
+	formatActivityTimelineSummary,
+	getActivityChainTailVisibleCount,
 	formatSelectionPreview,
 	getAppendIndexAfterTurnMessages,
 	getNextStickToBottom,
 	getRestoredScrollTop,
+	getVisibleActivityMessages,
+	getVisibleActivityTimelineEntries,
+	isComposerSendShortcut,
 	pickNextActiveSessionId,
 	pickSelectionText,
 	shouldDeferScrollRestore,
@@ -34,7 +40,14 @@ import {
 	shouldShowActivityEntry,
 	shouldStickToBottom
 } from "./session-helpers";
-import { buildTurnUserText, composeObsidianPrompt } from "./bridge-helpers";
+import {
+	buildReplayAssistantContent,
+	buildHermesInterimGuidance,
+	buildReplayUserContent,
+	buildTurnUserText,
+	composeObsidianPrompt
+} from "./bridge-helpers";
+import { buildSelectionContextWindow } from "./inline-edit-helpers";
 import { InlineEditManager, type InlineEditRunInput } from "./inline-edit";
 
 const VIEW_TYPE_HERMES_SIDEBAR = "hermes-sidebar-view";
@@ -89,6 +102,7 @@ interface HermesMessage {
 	role: HermesRole;
 	kind: HermesMessageKind;
 	content: string;
+	historyContent?: string;
 	pending?: boolean;
 	interim?: boolean;
 	attachments?: HermesMessageAttachment[];
@@ -148,6 +162,7 @@ interface LiveContextInfo {
 	noteTitle?: string;
 	notePath?: string;
 	selectionText?: string;
+	noteContext?: string;
 }
 
 interface HermesRunResult {
@@ -195,18 +210,22 @@ interface HermesActivityEntry {
 	createdAt: number;
 }
 
-interface LocalActivityInput {
-	text: string;
-	preview?: string;
-	status?: "running" | "done" | "error" | "info";
-	toolName?: string;
-}
-
 interface RenderedChatMessage {
 	row: HTMLDivElement;
 	bubble: HTMLDivElement;
 	body: HTMLDivElement;
 	activity?: HTMLElement;
+}
+
+interface ActivityTimelineRenderOptions {
+	forceExpanded?: boolean;
+	hideSummary?: boolean;
+}
+
+interface ActivityMessageChain {
+	groupId: string;
+	items: Array<{ message: HermesMessage; index: number }>;
+	endIndex: number;
 }
 
 interface ActiveViewScrollSnapshot {
@@ -274,16 +293,17 @@ class HermesSidebarPlugin extends Plugin {
 			id: "attach-current-selection-to-hermes",
 			name: "Attach current selection to Hermes",
 			callback: async () => {
-				const selection = this.getCurrentSelectionText();
-				if (!selection) {
-					new Notice("No selected text found in the active note.");
-					return;
-				}
 				const sidebar = await this.activateView();
-				sidebar.attachContext({
-					label: "Selection",
-					content: selection
-				});
+				sidebar.attachCurrentSelection();
+			}
+		});
+
+		this.addCommand({
+			id: "attach-current-note-to-hermes",
+			name: "Attach current note to Hermes",
+			callback: async () => {
+				const sidebar = await this.activateView();
+				await sidebar.attachCurrentArticle();
 			}
 		});
 
@@ -443,11 +463,83 @@ class HermesSidebarPlugin extends Plugin {
 	}
 
 	getLiveContextInfo(): LiveContextInfo {
+		const markdownView = this.getActiveMarkdownView();
 		const file = this.getCurrentContextFile();
+		const noteText = markdownView?.getViewData?.() ?? "";
+		const selectionText = this.selectionSnapshot.trim();
 		return {
 			noteTitle: (file?.basename ?? this.lastActiveNoteTitle) || undefined,
 			notePath: (file?.path ?? this.lastActiveNotePath) || undefined,
-			selectionText: this.selectionSnapshot.trim() || undefined
+			selectionText: selectionText || undefined,
+			noteContext:
+				selectionText && noteText
+					? buildSelectionContextWindow({
+							noteText,
+							selectedText: selectionText,
+							mode: markdownView?.getMode?.() ?? "source",
+							preferredOffset: 0,
+							windowLines: 6,
+							maxCharacters: 1800
+						})
+					: undefined
+		};
+	}
+
+	async getCurrentArticleContext(): Promise<PendingContext | null> {
+		const file = this.getCurrentContextFile();
+		if (!file) {
+			return null;
+		}
+
+		const markdownView = this.getActiveMarkdownView();
+		const noteText =
+			markdownView?.file?.path === file.path ? markdownView.getViewData() : await this.app.vault.cachedRead(file);
+		return {
+			label: "当前文章",
+			content: [
+				file.basename ? `Title: ${file.basename}` : "",
+				file.path ? `Path: ${file.path}` : "",
+				"```markdown",
+				noteText || "(空白文章)",
+				"```"
+			]
+				.filter(Boolean)
+				.join("\n")
+		};
+	}
+
+	getCurrentSelectionContext(): PendingContext | null {
+		const markdownView = this.getActiveMarkdownView();
+		const selectedText = this.getCurrentSelectionText().trim() || this.selectionSnapshot.trim();
+		if (!selectedText) {
+			return null;
+		}
+
+		const noteText = markdownView?.getViewData?.() ?? "";
+		const noteContext = noteText
+			? buildSelectionContextWindow({
+					noteText,
+					selectedText,
+					mode: markdownView?.getMode?.() ?? "source",
+					preferredOffset: 0,
+					windowLines: 6,
+					maxCharacters: 1800
+				})
+			: "";
+		return {
+			label: "选区",
+			content: [
+				"Selected text:",
+				"```text",
+				selectedText,
+				"```",
+				noteContext ? "Nearby note context:" : "",
+				noteContext ? "```text" : "",
+				noteContext,
+				noteContext ? "```" : ""
+			]
+				.filter(Boolean)
+				.join("\n")
 		};
 	}
 
@@ -642,7 +734,8 @@ class HermesSidebarView extends ItemView {
 	private messagesEl?: HTMLDivElement;
 	private contextEl?: HTMLDivElement;
 	private liveContextEl?: HTMLDivElement;
-	private activityEl?: HTMLDivElement;
+	private quickActionsEl?: HTMLDivElement;
+	private imageFileInputEl?: HTMLInputElement;
 	private sendButtonEl?: HTMLButtonElement;
 	private modelSelectEl?: HTMLSelectElement;
 	private reasoningSelectEl?: HTMLSelectElement;
@@ -659,7 +752,6 @@ class HermesSidebarView extends ItemView {
 	private activityRowEl?: HTMLDivElement;
 	private activityBubbleEl?: HTMLDivElement;
 	private activityTimelineEl?: HTMLElement;
-	private dismissedLiveNoteKey = "";
 	private activeTurnUserMessageId?: string;
 	private activeActivityMessageId?: string;
 	private activeRunCancel?: () => void;
@@ -673,6 +765,8 @@ class HermesSidebarView extends ItemView {
 	private suppressNextMessagesScroll = false;
 	private activityEntries: HermesActivityEntry[] = [];
 	private activityCounter = 0;
+	private expandedActivityMessageIds = new Set<string>();
+	private expandedActivityGroupIds = new Set<string>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: HermesSidebarPlugin) {
 		super(leaf);
@@ -710,6 +804,8 @@ class HermesSidebarView extends ItemView {
 			this.pendingScrollRestoreFrame = null;
 		}
 		this.cancelPendingStreamingRender();
+		this.expandedActivityMessageIds.clear();
+		this.expandedActivityGroupIds.clear();
 		this.pendingImages = [];
 		this.containerEl.empty();
 	}
@@ -720,6 +816,9 @@ class HermesSidebarView extends ItemView {
 			return;
 		}
 		this.renderLiveContext();
+		if (this.quickActionsEl?.isConnected) {
+			this.renderQuickActions(this.quickActionsEl, () => this.imageFileInputEl?.click());
+		}
 	}
 
 	isComposerFocused(): boolean {
@@ -730,7 +829,30 @@ class HermesSidebarView extends ItemView {
 		this.pendingContexts.push(context);
 		this.statusText = `已附加 ${context.label.toLowerCase()} 上下文`;
 		this.render();
-		new Notice(`${context.label} attached to Hermes.`);
+		new Notice(`已添加${context.label}。`);
+	}
+
+	async attachCurrentArticle(): Promise<void> {
+		const context = await this.plugin.getCurrentArticleContext();
+		if (!context) {
+			new Notice("当前没有可添加的文章。");
+			return;
+		}
+		this.pendingContexts.push(context);
+		this.statusText = `已添加文章：${this.plugin.getCurrentContextFile()?.basename ?? "当前文章"}`;
+		this.render(false);
+	}
+
+	attachCurrentSelection(): void {
+		const context = this.plugin.getCurrentSelectionContext();
+		if (!context) {
+			new Notice("请先在当前文章里选中一段文字。");
+			return;
+		}
+		this.pendingContexts.push(context);
+		this.plugin.clearSelectionSnapshot(false);
+		this.statusText = "已添加选区";
+		this.render(false);
 	}
 
 	private focusComposerWithoutScroll(): void {
@@ -758,7 +880,8 @@ class HermesSidebarView extends ItemView {
 		this.activityBubbleEl = undefined;
 		this.activityTimelineEl = undefined;
 		this.liveContextEl = undefined;
-		this.activityEl = undefined;
+		this.quickActionsEl = undefined;
+		this.imageFileInputEl = undefined;
 		const previousMessagesScrollTop = this.messagesEl?.scrollTop ?? null;
 		const wasAutoSticking = this.shouldAutoStickToBottom;
 		this.captureScrollIntent();
@@ -804,7 +927,6 @@ class HermesSidebarView extends ItemView {
 			this.pendingContexts = [];
 			this.queuedTurns = [];
 			this.activeStreamingMessageIndex = null;
-			this.dismissedLiveNoteKey = "";
 			this.plugin.clearSelectionSnapshot(true);
 			this.plugin.createSession();
 			this.statusText = "已开始新对话";
@@ -843,7 +965,6 @@ class HermesSidebarView extends ItemView {
 				this.pendingContexts = [];
 				this.queuedTurns = [];
 				this.activeStreamingMessageIndex = null;
-				this.dismissedLiveNoteKey = "";
 				this.plugin.setActiveSession(session.id);
 				this.statusText = "已切换对话";
 				this.render();
@@ -897,24 +1018,10 @@ class HermesSidebarView extends ItemView {
 		if (activeSession.messages.length === 0) {
 			this.messagesEl.createDiv({
 				cls: "hermes-sidebar-empty-state",
-				text: "选择一段文字，或直接向 Hermes 提问。"
+				text: "手动添加文章、选区或图片，再向 Hermes 提问。"
 			});
 		} else {
-			for (const [index, message] of activeSession.messages.entries()) {
-				const rendered = this.renderChatMessage(message);
-				if (index === this.activeStreamingMessageIndex && message.kind === "final" && rendered) {
-					this.streamingMessageRef = message;
-					this.streamingRowEl = rendered.row;
-					this.streamingBubbleEl = rendered.bubble;
-					this.streamingBodyEl = rendered.body;
-				}
-				if (message.id === this.activeActivityMessageId && rendered?.activity) {
-					this.activityMessageRef = message;
-					this.activityRowEl = rendered.row;
-					this.activityBubbleEl = rendered.bubble;
-					this.activityTimelineEl = rendered.activity;
-				}
-			}
+			this.renderSessionMessages(activeSession.messages);
 		}
 		const restoredScrollTop = getRestoredScrollTop(previousMessagesScrollTop, this.shouldAutoStickToBottom);
 		if (restoredScrollTop !== undefined) {
@@ -936,10 +1043,6 @@ class HermesSidebarView extends ItemView {
 		}
 
 		const composer = root.createDiv({ cls: "hermes-sidebar-composer" });
-		this.activityEl = composer.createDiv({
-			cls: "hermes-sidebar-activity-slot"
-		});
-		this.renderActivityStatus();
 		const preserveFocus = shouldRestoreComposerFocus(
 			!allowInputReset && !!this.inputEl && document.activeElement === this.inputEl,
 			this.shouldAutoStickToBottom
@@ -951,7 +1054,7 @@ class HermesSidebarView extends ItemView {
 			cls: "hermes-sidebar-input"
 		});
 		this.inputEl.value = this.draftText;
-		this.inputEl.placeholder = "问问 Hermes：可以围绕当前笔记、选区或图片...";
+		this.inputEl.placeholder = "问问 Hermes...";
 		this.inputEl.addEventListener("input", () => {
 			this.draftText = this.inputEl?.value ?? "";
 		});
@@ -962,25 +1065,23 @@ class HermesSidebarView extends ItemView {
 		this.contextEl = shell.createDiv({ cls: "hermes-sidebar-context" });
 		this.renderContextChips();
 
-		const toolbar = shell.createDiv({ cls: "hermes-sidebar-composer-toolbar" });
-		const controls = toolbar.createDiv({ cls: "hermes-sidebar-controls" });
-		const attachButton = controls.createEl("button", {
-			cls: "hermes-sidebar-attach-button",
-			text: "图片"
-		});
-		const fileInput = controls.createEl("input", {
+		const fileInput = shell.createEl("input", {
 			type: "file",
 			cls: "hermes-sidebar-file-input"
 		});
+		this.imageFileInputEl = fileInput;
 		fileInput.accept = "image/*";
 		fileInput.multiple = true;
-		attachButton.addEventListener("click", () => {
-			fileInput.click();
-		});
 		fileInput.addEventListener("change", () => {
 			void this.handleFileInput(fileInput.files);
 			fileInput.value = "";
 		});
+
+		this.quickActionsEl = shell.createDiv({ cls: "hermes-sidebar-quick-actions" });
+		this.renderQuickActions(this.quickActionsEl, () => fileInput.click());
+
+		const toolbar = shell.createDiv({ cls: "hermes-sidebar-composer-toolbar" });
+		const controls = toolbar.createDiv({ cls: "hermes-sidebar-controls" });
 
 		const modelControl = controls.createDiv({
 			cls: "hermes-sidebar-control-group"
@@ -1049,7 +1150,7 @@ class HermesSidebarView extends ItemView {
 				this.stopActiveRun();
 				return;
 			}
-			if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+			if (isComposerSendShortcut(event)) {
 				event.preventDefault();
 				void this.handleSend();
 			}
@@ -1071,99 +1172,16 @@ class HermesSidebarView extends ItemView {
 		}
 
 		this.liveContextEl.empty();
-		const liveContext = this.plugin.getLiveContextInfo();
-		const liveNoteKey = this.getLiveNoteKey(liveContext);
-		const isNoteDismissed = !!liveNoteKey && this.dismissedLiveNoteKey === liveNoteKey;
-		const hasLiveContext = !!((liveContext.noteTitle && !isNoteDismissed) || liveContext.selectionText);
-		this.liveContextEl.toggleClass("is-empty", !hasLiveContext);
-		this.liveContextEl.toggleClass("has-selection", !!liveContext.selectionText);
-		if (!hasLiveContext) {
-			return;
-		}
-
-		if (liveContext.noteTitle && !isNoteDismissed) {
-			const noteChip = this.liveContextEl.createDiv({
-				cls: "hermes-sidebar-chip hermes-sidebar-chip-note"
-			});
-			noteChip.createSpan({
-				cls: "hermes-sidebar-chip-prefix",
-				text: "Reading"
-			});
-			noteChip.createSpan({
-				cls: "hermes-sidebar-chip-value",
-				text: liveContext.noteTitle
-			});
-			const dismissNoteButton = noteChip.createEl("button", {
-				cls: "hermes-sidebar-chip-remove hermes-sidebar-live-note-dismiss",
-				text: "x",
-				attr: {
-					type: "button",
-					"aria-label": "本轮不附加当前文章"
-				}
-			});
-			dismissNoteButton.addEventListener("click", (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				this.dismissedLiveNoteKey = liveNoteKey;
-				this.statusText = "本轮已取消附加当前文章";
-				this.renderLiveContext();
-				this.refreshActivityStatus();
-			});
-		}
-
-		if (!liveContext.selectionText) {
-			return;
-		}
-
-		const selectionBox = this.liveContextEl.createEl("details", {
-			cls: "hermes-sidebar-selection-preview"
-		});
-		const selectionHeader = selectionBox.createEl("summary", {
-			cls: "hermes-sidebar-selection-header"
-		});
-		const selectionHeaderMain = selectionHeader.createDiv({
-			cls: "hermes-sidebar-selection-summary-main"
-		});
-		selectionHeaderMain.createDiv({
-			cls: "hermes-sidebar-selection-label",
-			text: "Selection"
-		});
-		selectionHeaderMain.createDiv({
-			cls: "hermes-sidebar-selection-text",
-			text: formatSelectionPreview(liveContext.selectionText)
-		});
-		const selectionHeaderSide = selectionHeader.createDiv({
-			cls: "hermes-sidebar-selection-summary-side"
-		});
-		selectionHeaderSide.createDiv({
-			cls: "hermes-sidebar-selection-meta",
-			text: summarizeSelectionLength(liveContext.selectionText)
-		});
-		const clearButton = selectionHeaderSide.createEl("button", {
-			cls: "hermes-sidebar-clear-selection",
-			text: "清除"
-		});
-		clearButton.addEventListener("click", (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			this.plugin.clearSelectionSnapshot(true);
-		});
-		selectionBox.createDiv({
-			cls: "hermes-sidebar-selection-fulltext",
-			text: liveContext.selectionText
-		});
-	}
-
-	private refreshActivityStatus(): void {
-		if (!this.activityEl) {
-			return;
-		}
-		this.renderActivityStatus();
+		this.liveContextEl.addClass("is-empty");
 	}
 
 	private renderChatMessage(
 		message: HermesMessage,
-		options: { deferBodyRender?: boolean } = {}
+		options: {
+			deferBodyRender?: boolean;
+			forceExpandActivityTimeline?: boolean;
+			hideActivityTimelineSummary?: boolean;
+		} = {}
 	): RenderedChatMessage | null {
 		if (!this.messagesEl) {
 			return null;
@@ -1178,6 +1196,7 @@ class HermesSidebarView extends ItemView {
 				"hermes-sidebar-chat-row",
 				message.kind === "activity" ? "is-activity" : "",
 				message.role === "user" ? "is-user" : "is-assistant",
+				message.interim ? "is-interim" : "",
 				message.kind,
 				hasAttachments ? "has-attachments" : ""
 			]
@@ -1189,7 +1208,10 @@ class HermesSidebarView extends ItemView {
 		}
 
 		if (message.kind === "activity") {
-			const activity = this.renderMessageActivityTimeline(row, message);
+			const activity = this.renderMessageActivityTimeline(row, message, {
+				forceExpanded: options.forceExpandActivityTimeline,
+				hideSummary: options.hideActivityTimelineSummary
+			});
 			return { row, bubble: row, body: row, activity };
 		}
 
@@ -1211,6 +1233,7 @@ class HermesSidebarView extends ItemView {
 				"hermes-sidebar-bubble",
 				message.kind,
 				message.role === "user" ? "is-user" : "is-ai",
+				message.interim ? "is-interim" : "",
 				hasAttachments ? "has-attachments" : ""
 			]
 				.filter(Boolean)
@@ -1226,13 +1249,159 @@ class HermesSidebarView extends ItemView {
 		return { row, bubble, body };
 	}
 
+	private renderSessionMessages(messages: HermesMessage[]): void {
+		if (!this.messagesEl) {
+			return;
+		}
+
+		for (let index = 0; index < messages.length; index += 1) {
+			const message = messages[index];
+			if (message.kind === "activity") {
+				const chain = this.collectActivityMessageChain(messages, index);
+				if (chain.items.length > 0) {
+					const isExpanded = this.expandedActivityGroupIds.has(chain.groupId);
+					const isRunningChain = chain.items.some(
+						(item) =>
+							item.message.pending ||
+							(item.message.activities ?? []).some((entry) => entry.status === "running")
+					);
+					const tailVisibleCount = getActivityChainTailVisibleCount(chain.items.map((item) => item.message));
+					if (chain.items.length === 1) {
+						const item = chain.items[0];
+						this.renderAndTrackMessage(item.message, item.index);
+						index = chain.endIndex;
+						continue;
+					}
+					const visibility = getVisibleActivityMessages(
+						chain.items.map((item) => item.message),
+						isExpanded,
+						tailVisibleCount,
+						isRunningChain
+					);
+					const hiddenCount = visibility.hiddenCount;
+					if (visibility.totalCount > 0 && (hiddenCount > 0 || isExpanded || !isRunningChain)) {
+						this.renderActivityChainSummary(chain, visibility.totalCount, hiddenCount, isExpanded);
+					}
+					for (const item of chain.items) {
+						if (!visibility.visibleMessages.includes(item.message)) {
+							continue;
+						}
+						this.renderAndTrackMessage(item.message, item.index, {
+							forceExpandActivityTimeline: isExpanded,
+							hideActivityTimelineSummary: isExpanded
+						});
+					}
+				}
+				index = chain.endIndex;
+				continue;
+			}
+
+			this.renderAndTrackMessage(message, index);
+		}
+	}
+
+	private renderAndTrackMessage(
+		message: HermesMessage,
+		index: number,
+		options: { forceExpandActivityTimeline?: boolean; hideActivityTimelineSummary?: boolean } = {}
+	): void {
+		const rendered = this.renderChatMessage(message, {
+			forceExpandActivityTimeline: options.forceExpandActivityTimeline,
+			hideActivityTimelineSummary: options.hideActivityTimelineSummary
+		});
+		if (index === this.activeStreamingMessageIndex && message.kind === "final" && rendered) {
+			this.streamingMessageRef = message;
+			this.streamingRowEl = rendered.row;
+			this.streamingBubbleEl = rendered.bubble;
+			this.streamingBodyEl = rendered.body;
+		}
+		if (message.id === this.activeActivityMessageId && rendered?.activity) {
+			this.activityMessageRef = message;
+			this.activityRowEl = rendered.row;
+			this.activityBubbleEl = rendered.bubble;
+			this.activityTimelineEl = rendered.activity;
+		}
+	}
+
+	private collectActivityMessageChain(messages: HermesMessage[], startIndex: number): ActivityMessageChain {
+		const items: Array<{ message: HermesMessage; index: number }> = [];
+		let endIndex = startIndex;
+		for (let index = startIndex; index < messages.length; index += 1) {
+			const candidate = messages[index];
+			if (candidate.kind !== "activity") {
+				break;
+			}
+			endIndex = index;
+			if (!this.hasVisibleActivities(candidate)) {
+				continue;
+			}
+			items.push({ message: candidate, index });
+		}
+		const groupId = items[0]?.message.id ?? `activity-group-${startIndex}`;
+		return { groupId, items, endIndex };
+	}
+
+	private renderActivityChainSummary(
+		chain: ActivityMessageChain,
+		totalCount: number,
+		hiddenCount: number,
+		isExpanded: boolean
+	): void {
+		if (!this.messagesEl) {
+			return;
+		}
+		const row = this.messagesEl.createDiv({
+			cls: "hermes-sidebar-chat-row hermes-sidebar-activity-group-row"
+		});
+		const summary = row.createDiv({
+			cls: "hermes-sidebar-run-trace-summary hermes-sidebar-activity-group-summary"
+		});
+		summary.createDiv({
+			cls: "hermes-sidebar-run-trace-summary-text",
+			text: formatActivityTimelineSummary(totalCount, hiddenCount)
+		});
+		const toggle = summary.createEl("button", {
+			cls: "hermes-sidebar-run-trace-toggle",
+			attr: {
+				type: "button",
+				title: isExpanded ? "收起这段过程链" : "展开这段过程链",
+				"aria-label": isExpanded ? "收起这段过程链" : "展开这段过程链"
+			}
+		});
+		setIcon(toggle, "chevron-right");
+		toggle.toggleClass("is-expanded", isExpanded);
+		toggle.addEventListener("mousedown", (event) => event.preventDefault());
+		toggle.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			this.setActivityGroupExpanded(chain.groupId, !isExpanded);
+			this.render(false);
+			this.scheduleMessagesToBottom();
+		});
+	}
+
+	private setActivityGroupExpanded(groupId: string, expanded: boolean): void {
+		if (!groupId) {
+			return;
+		}
+		if (expanded) {
+			this.expandedActivityGroupIds.add(groupId);
+			return;
+		}
+		this.expandedActivityGroupIds.delete(groupId);
+	}
+
 	private hasVisibleActivities(message: HermesMessage): boolean {
 		return (message.activities ?? []).some(
 			(entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
 		);
 	}
 
-	private renderMessageActivityTimeline(container: HTMLDivElement, message: HermesMessage): HTMLElement | undefined {
+	private renderMessageActivityTimeline(
+		container: HTMLDivElement,
+		message: HermesMessage,
+		options: ActivityTimelineRenderOptions = {}
+	): HTMLElement | undefined {
 		const activities = (message.activities ?? []).filter(
 			(entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
 		);
@@ -1240,14 +1409,57 @@ class HermesSidebarView extends ItemView {
 			return undefined;
 		}
 
+		const messageId = message.id;
+		const isExpanded = options.forceExpanded || Boolean(messageId && this.expandedActivityMessageIds.has(messageId));
 		const isRunning = message.pending || activities.some((entry) => entry.status === "running");
+		const latestActivity = activities.length > 0 ? activities[activities.length - 1] : undefined;
+		const tailVisibleCount =
+			activities.length > 1 && latestActivity?.toolName === "thinking" ? 2 : 1;
+		const visibility = getVisibleActivityTimelineEntries(activities, isExpanded, tailVisibleCount, isRunning);
 		const trace = container.createDiv({
 			cls: "hermes-sidebar-run-trace"
 		});
 		trace.toggleClass("is-running", isRunning);
+		trace.toggleClass("is-expanded", isExpanded);
+		trace.toggleClass("is-collapsed", !isExpanded);
+
+		const shouldRenderSummary =
+			!options.hideSummary && visibility.totalCount > 0 && (visibility.hiddenCount > 0 || isExpanded || !isRunning);
+		if (shouldRenderSummary) {
+			const summary = trace.createDiv({ cls: "hermes-sidebar-run-trace-summary" });
+			summary.createDiv({
+				cls: "hermes-sidebar-run-trace-summary-text",
+				text: formatActivityTimelineSummary(visibility.totalCount, visibility.hiddenCount)
+			});
+			const toggle = summary.createEl("button", {
+				cls: "hermes-sidebar-run-trace-toggle",
+				attr: {
+					type: "button",
+					title: isExpanded ? "收起这条过程链" : "展开这条过程链",
+					"aria-label": isExpanded ? "收起这条过程链" : "展开这条过程链"
+				}
+			});
+			setIcon(toggle, "chevron-right");
+			toggle.toggleClass("is-expanded", isExpanded);
+			toggle.addEventListener("mousedown", (event) => event.preventDefault());
+			toggle.addEventListener("click", (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				if (!messageId) {
+					return;
+				}
+				this.setActivityTimelineExpanded(messageId, !isExpanded);
+				this.refreshActivityMessage(message);
+				this.scheduleMessagesToBottom();
+			});
+		}
+
+		if (visibility.visibleEntries.length === 0) {
+			return trace;
+		}
 
 		const list = trace.createDiv({ cls: "hermes-sidebar-run-steps" });
-		for (const [index, entry] of activities.entries()) {
+		for (const [index, entry] of visibility.visibleEntries.entries()) {
 			const item = list.createDiv({
 				cls: `hermes-sidebar-run-step is-${entry.status}`
 			});
@@ -1393,44 +1605,35 @@ class HermesSidebarView extends ItemView {
 		}
 	}
 
-	private renderActivityStatus(): void {
-		if (!this.activityEl) {
-			return;
-		}
-
-		this.activityEl.empty();
-		const statusText = this.buildStatusText();
-		if (!statusText && this.activityEntries.length === 0) {
-			return;
-		}
-
-		const panel = this.activityEl.createDiv({ cls: "hermes-sidebar-activity" });
-		const header = panel.createDiv({ cls: "hermes-sidebar-activity-header" });
-		header.createDiv({
-			cls: "hermes-sidebar-activity-status",
-			text: statusText || "活动记录"
-		});
-
-		const toggle = header.createEl("button", {
-			cls: "hermes-sidebar-activity-toggle",
-			text: "过程",
-			attr: { type: "button" }
-		});
-		toggle.disabled = this.activityEntries.length === 0;
-		toggle.addEventListener("click", () => {
-			this.revealInlineActivityTimeline();
-		});
-	}
-
 	private revealInlineActivityTimeline(): void {
-		if (!this.activityTimelineEl?.isConnected) {
-			const target = this.getActiveActivityMessage();
-			if (target) {
-				this.ensureActivityMessageElements(target);
-			}
+		const target = this.getActiveActivityMessage();
+		if (!target?.id) {
+			return;
 		}
-		if (this.activityTimelineEl instanceof HTMLDetailsElement) {
-			this.activityTimelineEl.open = true;
+		const groupId = this.getActivityGroupIdForMessage(target);
+		if (groupId && !this.expandedActivityGroupIds.has(groupId)) {
+			this.setActivityGroupExpanded(groupId, true);
+		}
+		const activities = (target.activities ?? []).filter(
+			(entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
+		);
+		const isExpanded = this.expandedActivityMessageIds.has(target.id);
+		const isRunning = target.pending || activities.some((entry) => entry.status === "running");
+		const visibility = getVisibleActivityTimelineEntries(activities, isExpanded, 1, isRunning);
+		if (!isExpanded && visibility.hiddenCount > 0) {
+			this.setActivityTimelineExpanded(target.id, true);
+			this.render(false);
+			this.scheduleMessagesToBottom();
+			return;
+		}
+		if (!isExpanded) {
+			this.setActivityTimelineExpanded(target.id, true);
+			this.refreshActivityMessage(target);
+			this.scheduleMessagesToBottom();
+			return;
+		}
+		if (!this.activityTimelineEl?.isConnected) {
+			this.render(false);
 		}
 		this.scheduleMessagesToBottom();
 	}
@@ -1439,14 +1642,40 @@ class HermesSidebarView extends ItemView {
 		const target = this.getActiveActivityMessage();
 		if (target?.role === "assistant" && target.kind === "activity") {
 			this.settleActivityMessage(target);
-			const timeline = this.ensureActivityMessageElements(target);
-			const bubble = this.activityBubbleEl;
-			if (timeline && bubble) {
-				timeline.remove();
-				this.activityTimelineEl = this.renderMessageActivityTimeline(bubble, target);
-			}
+			this.refreshActivityMessage(target);
 			this.persistActiveSession(false);
 		}
+		this.refreshLastAssistantHistoryContent();
+	}
+
+	private setActivityTimelineExpanded(messageId: string, expanded: boolean): void {
+		if (!messageId) {
+			return;
+		}
+		if (expanded) {
+			this.expandedActivityMessageIds.add(messageId);
+			return;
+		}
+		this.expandedActivityMessageIds.delete(messageId);
+	}
+
+	private getActivityGroupIdForMessage(target: HermesMessage): string | undefined {
+		const messages = this.plugin.getActiveSession().messages;
+		const targetIndex = messages.findIndex((message) => message.id === target.id);
+		if (targetIndex < 0) {
+			return undefined;
+		}
+		let groupStartIndex = targetIndex;
+		for (let index = targetIndex; index >= 0; index -= 1) {
+			const candidate = messages[index];
+			if (candidate.kind !== "activity") {
+				break;
+			}
+			if (this.hasVisibleActivities(candidate)) {
+				groupStartIndex = index;
+			}
+		}
+		return messages[groupStartIndex]?.id ?? target.id;
 	}
 
 	private async renderMarkdownInto(container: HTMLDivElement, content: string): Promise<void> {
@@ -1494,7 +1723,14 @@ class HermesSidebarView extends ItemView {
 
 		for (const [index, context] of this.pendingContexts.entries()) {
 			const chip = this.contextEl.createDiv({ cls: "hermes-sidebar-chip" });
-			chip.setText(context.label);
+			chip.createSpan({
+				cls: "hermes-sidebar-chip-prefix",
+				text: "已添加"
+			});
+			chip.createSpan({
+				cls: "hermes-sidebar-chip-value",
+				text: context.label
+			});
 
 			const remove = chip.createEl("button", {
 				cls: "hermes-sidebar-chip-remove",
@@ -1502,13 +1738,17 @@ class HermesSidebarView extends ItemView {
 			});
 			remove.addEventListener("click", () => {
 				this.pendingContexts.splice(index, 1);
-				this.renderContextChips();
+				this.render(false);
 			});
 		}
 
 		for (const image of this.pendingImages) {
 			const chip = this.contextEl.createDiv({
 				cls: "hermes-sidebar-image-chip"
+			});
+			chip.createSpan({
+				cls: "hermes-sidebar-chip-prefix",
+				text: "图片"
 			});
 			const thumb = chip.createEl("img", { cls: "hermes-sidebar-image-thumb" });
 			thumb.src = image.previewDataUrl;
@@ -1528,6 +1768,81 @@ class HermesSidebarView extends ItemView {
 		}
 	}
 
+	private renderQuickActions(container: HTMLDivElement, openImagePicker: () => void): void {
+		container.empty();
+		const liveContext = this.plugin.getLiveContextInfo();
+		const selectedText = liveContext.selectionText ?? "";
+		const hasSelection = !!selectedText;
+
+		const title = container.createDiv({
+			cls: "hermes-sidebar-quick-actions-title",
+			text: hasSelection ? `选区已就绪 · ${summarizeSelectionLength(selectedText)}` : "快捷操作"
+		});
+
+		const actions = container.createDiv({ cls: "hermes-sidebar-quick-actions-list" });
+		const addAction = (
+			label: string,
+			icon: string,
+			onClick: () => void,
+			options: { disabled?: boolean; title?: string; active?: boolean } = {}
+		) => {
+			const button = actions.createEl("button", {
+				cls: "hermes-sidebar-quick-action",
+				attr: {
+					type: "button",
+					title: options.title ?? label,
+					"aria-label": label
+				}
+			});
+			button.disabled = !!options.disabled;
+			button.toggleClass("is-active", !!options.active);
+			const iconEl = button.createSpan({ cls: "hermes-sidebar-quick-action-icon" });
+			setIcon(iconEl, icon);
+			button.createSpan({
+				cls: "hermes-sidebar-quick-action-label",
+				text: label
+			});
+			button.addEventListener("click", (event) => {
+				event.preventDefault();
+				if (button.disabled) {
+					return;
+				}
+				onClick();
+			});
+			return button;
+		};
+
+		const currentFile = this.plugin.getCurrentContextFile();
+		const articleLabel = currentFile?.basename
+			? `添加文章：${currentFile.basename}`
+			: "添加当前文章";
+		addAction("文章", "file-text", () => void this.attachCurrentArticle(), {
+			disabled: !currentFile,
+			title: articleLabel
+		});
+		addAction("选区", "text-select", () => this.attachCurrentSelection(), {
+			disabled: !hasSelection,
+			title: hasSelection ? `发送时自动附加：${formatSelectionPreview(selectedText, 64)}` : "选中正文后自动附加选区",
+			active: hasSelection
+		});
+		addAction("图片", "image-plus", openImagePicker, {
+			title: "添加图片"
+		});
+		addAction(
+			"清空",
+			"eraser",
+			() => {
+				this.clearPendingAttachments();
+			},
+			{
+				disabled: this.pendingContexts.length === 0 && this.pendingImages.length === 0,
+				title: "清空已添加内容"
+			}
+		);
+
+		title.toggleClass("is-muted", !hasSelection && this.pendingContexts.length === 0 && this.pendingImages.length === 0);
+	}
+
 	private removePendingImage(imageId: string): void {
 		const index = this.pendingImages.findIndex((image) => image.id === imageId);
 		if (index === -1) {
@@ -1535,7 +1850,17 @@ class HermesSidebarView extends ItemView {
 		}
 		const [removed] = this.pendingImages.splice(index, 1);
 		cleanupAttachmentFile(removed.path);
-		this.renderContextChips();
+		this.render(false);
+	}
+
+	private clearPendingAttachments(): void {
+		for (const image of this.pendingImages) {
+			cleanupAttachmentFile(image.path);
+		}
+		this.pendingContexts = [];
+		this.pendingImages = [];
+		this.statusText = "已清空手动添加内容";
+		this.render(false);
 	}
 
 	private applyModelSelection(value: string): void {
@@ -1561,18 +1886,15 @@ class HermesSidebarView extends ItemView {
 		}
 	}
 
-	private getLiveNoteKey(liveContext = this.plugin.getLiveContextInfo()): string {
-		return (liveContext.notePath || liveContext.noteTitle || "").trim();
-	}
-
 	private getActiveTurnLiveContext(): LiveContextInfo {
-		const liveContext = { ...this.plugin.getLiveContextInfo() };
-		const liveNoteKey = this.getLiveNoteKey(liveContext);
-		if (liveNoteKey && this.dismissedLiveNoteKey === liveNoteKey) {
-			delete liveContext.noteTitle;
-			delete liveContext.notePath;
+		const liveContext = this.plugin.getLiveContextInfo();
+		if (!liveContext.selectionText) {
+			return {};
 		}
-		return liveContext;
+		return {
+			selectionText: liveContext.selectionText,
+			noteContext: liveContext.noteContext
+		};
 	}
 
 	private nextMessageId(prefix: string): string {
@@ -1588,7 +1910,7 @@ class HermesSidebarView extends ItemView {
 			.messages.filter((message) => !message.interim && message.kind !== "progress" && message.kind !== "activity")
 			.map((message) => ({
 				role: message.role,
-				content: message.content
+				content: message.historyContent?.trim() || message.content
 			}));
 	}
 
@@ -1599,6 +1921,16 @@ class HermesSidebarView extends ItemView {
 		}
 
 		const session = this.plugin.getActiveSession();
+		const insertIndex = getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
+		const previousMessage = insertIndex > 0 ? session.messages[insertIndex - 1] : undefined;
+		if (
+			previousMessage?.role === "assistant" &&
+			previousMessage.kind === "final" &&
+			previousMessage.interim &&
+			previousMessage.content.trim() === text
+		) {
+			return;
+		}
 		this.appendTurnMessage(session, {
 			id: this.nextMessageId("assistant"),
 			role: "assistant",
@@ -1636,7 +1968,8 @@ class HermesSidebarView extends ItemView {
 		this.activityBubbleEl = undefined;
 		this.activityTimelineEl = undefined;
 		this.persistActiveSession(false);
-		this.ensureActivityMessageElements(target);
+		this.render(false);
+		this.scheduleMessagesToBottom();
 		return target;
 	}
 
@@ -1726,6 +2059,14 @@ class HermesSidebarView extends ItemView {
 		}
 		const preview = event.preview?.trim() || undefined;
 		const status = event.status ?? (event.isError ? "error" : "info");
+		if (toolName === "thinking") {
+			const latestThinking = [...this.activityEntries]
+				.reverse()
+				.find((entry) => entry.toolName === "thinking");
+			if (latestThinking?.status === status && latestThinking.preview === preview) {
+				return;
+			}
+		}
 		if (toolName && toolName !== "thinking" && status === "running") {
 			this.settleCurrentActivityIf((entry) => entry.toolName === "thinking" && entry.status === "running");
 		}
@@ -1836,58 +2177,13 @@ class HermesSidebarView extends ItemView {
 	}
 
 	private refreshActivityMessage(target: HermesMessage): void {
-		const timeline = this.ensureActivityMessageElements(target);
-		const bubble = this.activityBubbleEl;
-		if (!timeline || !bubble) {
-			this.render(false);
-			return;
-		}
-
-		timeline.remove();
-		const nextTimeline = this.renderMessageActivityTimeline(bubble, target);
-		this.activityTimelineEl = nextTimeline;
+		this.activityMessageRef = undefined;
+		this.activityRowEl = undefined;
+		this.activityBubbleEl = undefined;
+		this.activityTimelineEl = undefined;
+		this.render(false);
 		this.persistActiveSession(false);
 		this.scheduleMessagesToBottom();
-	}
-
-	private pushLocalActivity(input: LocalActivityInput): void {
-		const text = input.text.trim();
-		if (!text) {
-			return;
-		}
-
-		const existingRunningIndex = input.toolName
-			? this.activityEntries.findIndex(
-					(entry) =>
-						entry.toolName === input.toolName &&
-						shouldMergeActivityEntry(input.toolName, entry.status, input.status ?? "info", entry.preview, input.preview)
-				)
-			: -1;
-
-		const entry: HermesActivityEntry = {
-			id: `activity-${Date.now()}-${++this.activityCounter}`,
-			text,
-			toolName: input.toolName,
-			preview: input.preview?.trim() || undefined,
-			status: input.status ?? "info",
-			createdAt: Date.now()
-		};
-		if (existingRunningIndex >= 0) {
-			const updatedEntry = {
-				...this.activityEntries[existingRunningIndex],
-				text,
-				status: entry.status,
-				preview: entry.preview,
-				createdAt: entry.createdAt
-			};
-			this.activityEntries[existingRunningIndex] = updatedEntry;
-			this.updateActivityMessageByEntryId(updatedEntry.id, updatedEntry);
-		} else {
-			this.activityEntries.push(entry);
-			this.ensureActivityMessage(entry);
-		}
-		this.activityEntries = this.activityEntries.slice(-20);
-		this.statusText = text;
 	}
 
 	private setFallbackStatus(text: string): void {
@@ -1967,11 +2263,16 @@ class HermesSidebarView extends ItemView {
 	private finalizeActiveStream(finalText?: string): void {
 		const session = this.plugin.getActiveSession();
 		if (this.activeStreamingMessageIndex === null) {
+			const content = finalText?.trim() || "(Hermes returned an empty response.)";
 			const message: HermesMessage = {
 				id: this.nextMessageId("assistant"),
 				role: "assistant",
 				kind: "final",
-				content: finalText?.trim() || "(Hermes returned an empty response.)",
+				content,
+				historyContent: buildReplayAssistantContent({
+					finalText: content,
+					activities: this.activityEntries
+				}),
 				pending: false
 			};
 			this.activeStreamingMessageIndex = this.appendTurnMessage(session, message);
@@ -1994,6 +2295,10 @@ class HermesSidebarView extends ItemView {
 		} else if (!target.content.trim()) {
 			target.content = "(Hermes returned an empty response.)";
 		}
+		target.historyContent = buildReplayAssistantContent({
+			finalText: target.content,
+			activities: this.activityEntries
+		});
 		target.pending = false;
 		this.cancelPendingStreamingRender();
 		if (this.streamingBodyEl?.isConnected) {
@@ -2003,6 +2308,21 @@ class HermesSidebarView extends ItemView {
 			this.refreshActivityMessage(target);
 		}
 		this.persistActiveSession(false);
+	}
+
+	private refreshLastAssistantHistoryContent(): void {
+		const session = this.plugin.getActiveSession();
+		for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+			const message = session.messages[index];
+			if (message.role !== "assistant" || message.kind !== "final" || message.interim) {
+				continue;
+			}
+			message.historyContent = buildReplayAssistantContent({
+				finalText: message.content,
+				activities: this.activityEntries
+			});
+			return;
+		}
 	}
 
 	private async handlePasteImages(event: ClipboardEvent): Promise<void> {
@@ -2064,7 +2384,6 @@ class HermesSidebarView extends ItemView {
 		if (turn.liveContext.selectionText) {
 			this.plugin.clearSelectionSnapshot(false);
 		}
-		this.dismissedLiveNoteKey = "";
 		this.statusText = this.isSending
 			? `已加入队列（还有 ${this.queuedTurns.length} 条待处理）`
 			: "Hermes 已收到这条消息";
@@ -2107,7 +2426,13 @@ class HermesSidebarView extends ItemView {
 			id: this.nextMessageId("user"),
 			role: "user",
 			kind: "user",
-			content: turn.userText
+			content: turn.userText,
+			historyContent: buildReplayUserContent({
+				userText: turn.userText,
+				contexts: turn.contexts,
+				liveContext: turn.liveContext,
+				imageNames: turn.images.map((image) => image.name)
+			})
 		};
 		if (imageAttachments.length > 0) {
 			userMessage.attachments = imageAttachments;
@@ -2121,6 +2446,8 @@ class HermesSidebarView extends ItemView {
 		this.activeStreamingMessageIndex = null;
 		this.activityMessageRef = undefined;
 		this.activeActivityMessageId = undefined;
+		this.expandedActivityMessageIds.clear();
+		this.expandedActivityGroupIds.clear();
 		this.isSending = true;
 		this.activityEntries = [];
 		this.statusText = "";
@@ -2153,7 +2480,6 @@ class HermesSidebarView extends ItemView {
 							if (this.activityEntries.length === 0 || isDetailedStatusText(event.text || "")) {
 								this.statusText = event.text || this.statusText;
 							}
-							this.refreshActivityStatus();
 							return;
 						}
 
@@ -2163,7 +2489,6 @@ class HermesSidebarView extends ItemView {
 							if (activityText && event.eventType !== "run.config") {
 								this.statusText = activityText;
 							}
-							this.refreshActivityStatus();
 							return;
 						}
 
@@ -2171,7 +2496,6 @@ class HermesSidebarView extends ItemView {
 							if (event.text) {
 								this.appendInterimAssistantMessage(event.text);
 								this.statusText = `正在处理：${formatSelectionPreview(event.text, 72)}`;
-								this.refreshActivityStatus();
 							}
 							return;
 						}
@@ -2179,16 +2503,13 @@ class HermesSidebarView extends ItemView {
 						const target = this.ensureStreamingFinalMessage();
 						target.content += event.text || "";
 						target.pending = true;
-						this.statusText = `正在写回复：已输出 ${target.content.length} chars`;
 						this.queueStreamingMessageRender(target);
-						this.refreshActivityStatus();
 						return;
 					}
 
 					if (event.type === "segment_break") {
 						this.convertActiveStreamToProgress();
 						this.setFallbackStatus("Hermes 正在继续处理");
-						this.refreshActivityStatus();
 						this.scrollMessagesToBottom();
 						return;
 					}
@@ -2202,7 +2523,6 @@ class HermesSidebarView extends ItemView {
 						this.activeStreamingMessageIndex = null;
 						hasFinalized = true;
 						this.statusText = session.sessionId ? "已连接" : "已收到回复";
-						this.refreshActivityStatus();
 						this.scheduleMessagesToBottom();
 					}
 				}
@@ -2222,7 +2542,6 @@ class HermesSidebarView extends ItemView {
 			}
 			this.persistActiveSession();
 			this.statusText = session.sessionId ? "已连接" : "已收到回复";
-			this.refreshActivityStatus();
 		} catch (error) {
 			if (isHermesAbortError(error)) {
 				this.convertActiveStreamToProgress();
@@ -2246,7 +2565,6 @@ class HermesSidebarView extends ItemView {
 				this.statusText = "Hermes call failed";
 				new Notice("Hermes request failed. Check the sidebar for details.");
 			}
-			this.refreshActivityStatus();
 		} finally {
 			this.activeTurnUserMessageId = undefined;
 			this.activeActivityMessageId = undefined;
@@ -2256,7 +2574,6 @@ class HermesSidebarView extends ItemView {
 			this.activeRunCancel = undefined;
 			this.isSending = false;
 			this.settleInlineActivityTimeline();
-			this.refreshActivityStatus();
 			this.scheduleMessagesToBottom();
 		}
 	}
@@ -2267,7 +2584,6 @@ class HermesSidebarView extends ItemView {
 		}
 		this.statusText = "正在停止当前任务";
 		this.activeRunCancel();
-		this.refreshActivityStatus();
 	}
 
 	private persistActiveSession(touch = true): void {
@@ -2286,22 +2602,6 @@ class HermesSidebarView extends ItemView {
 
 	private composePrompt(userText: string, contexts: PendingContext[], liveContext: LiveContextInfo): string {
 		return composeObsidianPrompt({ userText, contexts, liveContext });
-	}
-
-	private buildStatusText(): string {
-		const parts: string[] = [];
-		const visibleActivity = this.getLatestVisibleActivityText();
-		const primaryStatus = visibleActivity || this.statusText;
-		if (!shouldHideStatusText(primaryStatus)) {
-			parts.push(primaryStatus);
-		}
-		if (this.queuedTurns.length > 0) {
-			parts.push(`队列 ${this.queuedTurns.length}`);
-		}
-		if (this.isSending) {
-			parts.push("Esc 停止");
-		}
-		return parts.join(" · ");
 	}
 
 	private getModelLabel(value: string): string {
@@ -2702,18 +3002,7 @@ function buildHermesSystemPrompt(
 	runtime?: { provider?: string; model?: string; reasoningEffort?: string }
 ): string {
 	const trimmed = basePrompt.trim();
-	const runtimeProvider = runtime?.provider?.trim() || "unknown";
-	const runtimeModel = runtime?.model?.trim() || "unknown";
-	const runtimeReasoning = runtime?.reasoningEffort?.trim() || "default";
-	const progressInstruction = [
-		`Current runtime: provider=${runtimeProvider}, model=${runtimeModel}, reasoning_effort=${runtimeReasoning}.`,
-		"If the user asks what reasoning strength is active, answer from this Current runtime line instead of guessing from your hidden internals.",
-		"While working, you may send brief interim assistant messages to the user in natural Chinese.",
-		"Use those interim messages like real progress updates someone would actually say in chat.",
-		"Keep them short and warm.",
-		"Do not reveal chain-of-thought, raw tool logs, internal trace text, or hidden reasoning.",
-		"Keep the final answer separate from any interim progress updates."
-	].join(" ");
+	const progressInstruction = buildHermesInterimGuidance(runtime);
 
 	return trimmed ? `${trimmed}\n\n${progressInstruction}` : progressInstruction;
 }
@@ -2847,6 +3136,9 @@ function isHermesMessage(value: unknown): value is HermesMessage {
 	if ("attachments" in value && value.attachments !== undefined && !Array.isArray(value.attachments)) {
 		return false;
 	}
+	if ("historyContent" in value && value.historyContent !== undefined && typeof value.historyContent !== "string") {
+		return false;
+	}
 	if ("activities" in value && value.activities !== undefined && !Array.isArray(value.activities)) {
 		return false;
 	}
@@ -2968,8 +3260,7 @@ function isDetailedStatusText(text: string): boolean {
 		"正在思考中",
 		"正在调用工具中",
 		"Hermes 正在处理",
-		"Hermes 正在继续处理",
-		"Hermes 正在写回复"
+		"Hermes 正在继续处理"
 	]).has(value);
 }
 

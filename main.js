@@ -30,6 +30,28 @@ var import_node_path = require("node:path");
 
 // src/session-helpers.ts
 var DEFAULT_SESSION_TITLE = "\u65B0\u5BF9\u8BDD";
+function getActivityChainTailVisibleCount(messages) {
+  const filtered = messages.filter(
+    (message) => (message.activities ?? []).some((entry) => {
+      if (!entry) {
+        return false;
+      }
+      return shouldShowActivityEntry(entry.toolName);
+    })
+  );
+  if (filtered.length <= 1) {
+    return 1;
+  }
+  const latestVisibleMessage = filtered[filtered.length - 1];
+  const visibleEntries = (latestVisibleMessage.activities ?? []).filter((entry) => {
+    if (!entry) {
+      return false;
+    }
+    return shouldShowActivityEntry(entry.toolName);
+  });
+  const latestVisibleEntry = visibleEntries.length > 0 ? visibleEntries[visibleEntries.length - 1] : null;
+  return latestVisibleEntry?.toolName === "thinking" ? 2 : 1;
+}
 function formatSelectionPreview(text, maxLength = 48) {
   const compact = text.replace(/\s+/g, " ").trim();
   if (!compact) {
@@ -43,6 +65,12 @@ function formatSelectionPreview(text, maxLength = 48) {
 function buildSessionTitle(text, maxLength = 24) {
   const preview = formatSelectionPreview(text, maxLength);
   return preview || DEFAULT_SESSION_TITLE;
+}
+function isComposerSendShortcut(input) {
+  if (input.key !== "Enter" || input.altKey) {
+    return false;
+  }
+  return !!(input.shiftKey || input.metaKey || input.ctrlKey);
 }
 function pickNextActiveSessionId(sessions, preferredId) {
   if (preferredId && sessions.some((session) => session.id === preferredId)) {
@@ -93,6 +121,61 @@ function canUpdateBridgeEventWithoutFullRender(type) {
 function shouldShowActivityEntry(toolName) {
   return (toolName || "").trim() !== "run.config";
 }
+function formatActivityTimelineSummary(totalCount, hiddenCount) {
+  if (totalCount <= 0) {
+    return "";
+  }
+  if (hiddenCount > 0 && hiddenCount < totalCount) {
+    return `\u8FC7\u7A0B \xB7 ${totalCount} \u6761 \xB7 \u5DF2\u6298\u53E0 ${hiddenCount} \u6761`;
+  }
+  return `\u8FC7\u7A0B \xB7 ${totalCount} \u6761`;
+}
+function getVisibleActivityTimelineEntries(entries, expanded = false, tailVisibleCount = 1, includeCollapsedTail = true) {
+  const filtered = entries.filter((entry) => shouldShowActivityEntry(entry.toolName));
+  if (filtered.length === 0) {
+    return { visibleEntries: [], hiddenCount: 0, totalCount: 0 };
+  }
+  if (expanded || includeCollapsedTail && filtered.length <= tailVisibleCount) {
+    return { visibleEntries: filtered, hiddenCount: 0, totalCount: filtered.length };
+  }
+  const visibleIndexes = /* @__PURE__ */ new Set();
+  if (includeCollapsedTail) {
+    const latestIndex = Math.max(0, filtered.length - tailVisibleCount);
+    for (let index = latestIndex; index < filtered.length; index += 1) {
+      visibleIndexes.add(index);
+    }
+  }
+  const visibleEntries = filtered.filter((_, index) => visibleIndexes.has(index));
+  return {
+    visibleEntries,
+    hiddenCount: filtered.length - visibleEntries.length,
+    totalCount: filtered.length
+  };
+}
+function getVisibleActivityMessages(messages, expanded = false, tailVisibleCount = 1, includeCollapsedTail = true) {
+  const filtered = messages.filter(
+    (message) => (message.activities ?? []).some((entry) => entry && shouldShowActivityEntry(entry.toolName))
+  );
+  if (filtered.length === 0) {
+    return { visibleMessages: [], hiddenCount: 0, totalCount: 0 };
+  }
+  if (expanded || includeCollapsedTail && filtered.length <= tailVisibleCount) {
+    return { visibleMessages: filtered, hiddenCount: 0, totalCount: filtered.length };
+  }
+  const visibleIndexes = /* @__PURE__ */ new Set();
+  if (includeCollapsedTail) {
+    const latestIndex = Math.max(0, filtered.length - tailVisibleCount);
+    for (let index = latestIndex; index < filtered.length; index += 1) {
+      visibleIndexes.add(index);
+    }
+  }
+  const visibleMessages = filtered.filter((_, index) => visibleIndexes.has(index));
+  return {
+    visibleMessages,
+    hiddenCount: filtered.length - visibleMessages.length,
+    totalCount: filtered.length
+  };
+}
 function shouldMergeActivityEntry(toolName, currentStatus, incomingStatus, currentPreview, incomingPreview) {
   if (!toolName) {
     return false;
@@ -140,22 +223,26 @@ function shouldRefreshSelectionSnapshot(input) {
   }
   return true;
 }
-function shouldHideStatusText(statusText) {
-  return (/* @__PURE__ */ new Set([
-    "",
-    "Ready",
-    "Connected",
-    "Reply received",
-    "Started a fresh session",
-    "\u5DF2\u8FDE\u63A5",
-    "\u5DF2\u6536\u5230\u56DE\u590D",
-    "\u5DF2\u5F00\u59CB\u65B0\u5BF9\u8BDD"
-  ])).has(statusText);
-}
 
 // src/bridge-helpers.ts
 function normalizeText(text) {
   return typeof text === "string" ? text.trim() : "";
+}
+function buildHermesInterimGuidance(runtime) {
+  const runtimeProvider = normalizeText(runtime?.provider) || "unknown";
+  const runtimeModel = normalizeText(runtime?.model) || "unknown";
+  const runtimeReasoning = normalizeText(runtime?.reasoningEffort) || "default";
+  return [
+    `Current runtime: provider=${runtimeProvider}, model=${runtimeModel}, reasoning_effort=${runtimeReasoning}.`,
+    "If the user asks what reasoning strength is active, answer from this Current runtime line instead of guessing from your hidden internals.",
+    "For multi-step, tool-using, or longer tasks, proactively send 1-3 brief interim assistant messages to the user in natural Chinese before the final answer.",
+    "Good moments include after you finish reading important context, when you begin writing, or when your plan meaningfully changes.",
+    "Skip interim updates for very short tasks where they would feel noisy.",
+    "Use those interim messages like real progress updates someone would actually say in chat.",
+    "Keep them short, warm, and concrete.",
+    "Do not reveal chain-of-thought, raw tool logs, internal trace text, or hidden reasoning.",
+    "Keep the final answer separate from any interim progress updates."
+  ].join(" ");
 }
 function buildTurnUserText(text, imageCount) {
   const normalized = normalizeText(text);
@@ -193,6 +280,17 @@ function composeObsidianPrompt(input) {
       ].join("\n")
     );
   }
+  if (liveContext.noteContext) {
+    liveBlocks.push(
+      [
+        "## Current note context",
+        "The following text is a nearby context window from the open note. Use it together with the highlighted selection.",
+        "```text",
+        liveContext.noteContext,
+        "```"
+      ].join("\n")
+    );
+  }
   if (input.contexts.length === 0 && liveBlocks.length === 0) {
     return input.userText;
   }
@@ -206,11 +304,95 @@ ${context.content}`).join("\n\n");
     input.userText
   ].filter(Boolean).join("\n\n");
 }
-
-// src/inline-edit.ts
-var import_obsidian = require("obsidian");
-var import_state = require("@codemirror/state");
-var import_view = require("@codemirror/view");
+function buildReplayUserContent(input) {
+  const sections = [];
+  const userText = normalizeText(input.userText);
+  if (userText) {
+    sections.push(`User request:
+${userText}`);
+  }
+  const { liveContext } = input;
+  if (liveContext.noteTitle || liveContext.notePath) {
+    sections.push(
+      [
+        "Current open note:",
+        liveContext.noteTitle ? `- Title: ${liveContext.noteTitle}` : "",
+        liveContext.notePath ? `- Path: ${liveContext.notePath}` : ""
+      ].filter(Boolean).join("\n")
+    );
+  }
+  if (liveContext.selectionText) {
+    sections.push(
+      [
+        "Highlighted selection attached:",
+        liveContext.selectionText.trim()
+      ].join("\n")
+    );
+  }
+  if (liveContext.noteContext) {
+    sections.push(
+      [
+        "Nearby note context attached:",
+        liveContext.noteContext.trim()
+      ].join("\n")
+    );
+  }
+  for (const context of input.contexts) {
+    const label = normalizeText(context.label) || "\u9644\u52A0\u4E0A\u4E0B\u6587";
+    const content = normalizeText(context.content);
+    if (!content) {
+      continue;
+    }
+    sections.push(`Manual attachment - ${label}:
+${content}`);
+  }
+  const imageNames = (input.imageNames ?? []).map((name) => normalizeText(name)).filter(Boolean);
+  if (imageNames.length > 0) {
+    sections.push(`Attached images: ${imageNames.join(", ")}`);
+  }
+  return sections.filter(Boolean).join("\n\n");
+}
+function buildReplayAssistantContent(input) {
+  const sections = [];
+  const finalText = normalizeText(input.finalText);
+  if (finalText) {
+    sections.push(finalText);
+  }
+  const recap = summarizeReplayActivities(input.activities);
+  if (recap.length > 0) {
+    sections.push(["Work recap:", ...recap.map((item) => `- ${item}`)].join("\n"));
+  }
+  return sections.filter(Boolean).join("\n\n");
+}
+function summarizeReplayActivities(activities) {
+  if (!Array.isArray(activities) || activities.length === 0) {
+    return [];
+  }
+  const ignoredTools = /* @__PURE__ */ new Set(["thinking", "writer", "run.config"]);
+  const seen = /* @__PURE__ */ new Set();
+  const output = [];
+  for (const activity of activities) {
+    const toolName = normalizeText(activity.toolName ?? void 0);
+    const preview = normalizeText(activity.preview ?? void 0);
+    const status = normalizeText(activity.status ?? void 0).toLowerCase();
+    if (!toolName || ignoredTools.has(toolName) || !preview) {
+      continue;
+    }
+    if (status === "running") {
+      continue;
+    }
+    const line = `${toolName}: ${preview}`;
+    if (seen.has(line)) {
+      continue;
+    }
+    seen.add(line);
+    output.push(line);
+    if (output.length >= 4) {
+      break;
+    }
+  }
+  return output;
+}
 
 // src/inline-edit-helpers.ts
 var INLINE_EDIT_ACTIONS = [
@@ -221,6 +403,22 @@ var INLINE_EDIT_ACTIONS = [
     description: "\u4FDD\u6301\u539F\u610F\uFF0C\u8BA9\u6587\u5B57\u66F4\u81EA\u7136\u9AD8\u7EA7\u3002",
     mode: "replace",
     keywords: ["\u6DA6\u8272", "polish", "rewrite", "\u6539\u5199"]
+  },
+  {
+    id: "format",
+    label: "\u683C\u5F0F\u4F18\u5316",
+    shortLabel: "\u683C\u5F0F",
+    description: "\u6574\u7406\u6210\u66F4\u597D\u770B\u7684 Obsidian Markdown\u3002",
+    mode: "replace",
+    keywords: ["\u683C\u5F0F", "markdown", "\u6392\u7248", "\u7F8E\u5316", "\u597D\u770B"]
+  },
+  {
+    id: "html",
+    label: "HTML",
+    shortLabel: "HTML",
+    description: "\u8F6C\u6210 Obsidian \u53EF\u76F4\u63A5\u4F7F\u7528\u7684 HTML\u3002",
+    mode: "replace",
+    keywords: ["html", "html\u5316", "\u6807\u7B7E", "\u5BCC\u6587\u672C"]
   },
   {
     id: "clarify",
@@ -250,9 +448,17 @@ var INLINE_EDIT_ACTIONS = [
     id: "wiki-link",
     label: "\u52A0\u5165 Wiki \u94FE\u63A5",
     shortLabel: "Wiki",
-    description: "\u81EA\u7136\u7A7F\u63D2 Obsidian Wiki \u94FE\u63A5\u3002",
+    description: "\u53EA\u94FE\u63A5\u77E5\u8BC6\u5E93\u91CC\u771F\u5B9E\u5B58\u5728\u7684\u7B14\u8BB0\u3002",
     mode: "replace",
     keywords: ["wiki", "\u94FE\u63A5", "\u53CC\u94FE", "link"]
+  },
+  {
+    id: "custom",
+    label: "\u81EA\u5B9A\u4E49\u63D0\u95EE",
+    shortLabel: "\u81EA\u5B9A\u4E49",
+    description: "\u76F4\u63A5\u5199\u4F60\u7684\u8981\u6C42\uFF0C\u8BA9 Hermes \u6309\u8981\u6C42\u4FEE\u6539\u3002",
+    mode: "replace",
+    keywords: ["\u81EA\u5B9A\u4E49", "custom", "\u63D0\u95EE", "\u8981\u6C42"]
   },
   {
     id: "continue",
@@ -290,6 +496,10 @@ var INLINE_EDIT_ACTIONS = [
 function getInlineEditAction(actionId) {
   return INLINE_EDIT_ACTIONS.find((action) => action.id === actionId);
 }
+function getInlineEditToolbarActions(actions = INLINE_EDIT_ACTIONS) {
+  const toolbarIds = /* @__PURE__ */ new Set(["polish", "format", "html", "shorten", "wiki-link", "custom"]);
+  return actions.filter((action) => toolbarIds.has(action.id));
+}
 function parseSlashTrigger(line, cursorCh) {
   const beforeCursor = line.slice(0, cursorCh);
   const match = beforeCursor.match(/(?:^|\s)\/([\p{L}\p{N}\p{Script=Han}_-]*)$/u);
@@ -314,6 +524,99 @@ function filterInlineEditActions(query, actions = INLINE_EDIT_ACTIONS) {
     (action) => [action.label, action.shortLabel, action.description, ...action.keywords].join(" ").toLowerCase().includes(normalized)
   );
 }
+function selectVaultNoteTitlesForWikiPrompt(input) {
+  const normalizedTarget = normalizeForSearch(input.targetText);
+  const normalizedNoteTitle = normalizeForSearch(input.noteTitle ?? "");
+  const scored = input.titles.map((title, index) => {
+    const normalizedTitle = normalizeForSearch(title);
+    let score = 0;
+    if (normalizedTitle && normalizedTarget.includes(normalizedTitle)) {
+      score += 1e3;
+    }
+    if (normalizedTitle && normalizedNoteTitle.includes(normalizedTitle)) {
+      score += 400;
+    }
+    for (const char of Array.from(normalizedTitle)) {
+      if (normalizedTarget.includes(char)) {
+        score += 1;
+      }
+    }
+    return { title, index, score };
+  }).sort((left, right) => right.score - left.score || left.index - right.index);
+  return scored.slice(0, input.limit ?? 80).map((item) => item.title);
+}
+function findInlineEditSourceRange(noteText, selectedText, preferredOffset = 0) {
+  const targetText = normalizeSelectedText(selectedText);
+  if (!targetText) {
+    return null;
+  }
+  const exactOffset = findClosestIndex(noteText, targetText, preferredOffset);
+  if (exactOffset !== -1) {
+    const exactTableRange = expandTableRange(noteText, exactOffset, exactOffset + targetText.length);
+    if (exactTableRange) {
+      return {
+        fromOffset: exactTableRange.fromOffset,
+        toOffset: exactTableRange.toOffset,
+        sourceText: noteText.slice(exactTableRange.fromOffset, exactTableRange.toOffset),
+        targetText,
+        kind: "table-rows"
+      };
+    }
+    return {
+      fromOffset: exactOffset,
+      toOffset: exactOffset + targetText.length,
+      sourceText: noteText.slice(exactOffset, exactOffset + targetText.length),
+      targetText,
+      kind: "exact"
+    };
+  }
+  const chunks = targetText.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!chunks.length) {
+    return null;
+  }
+  let searchOffset = Math.max(0, Math.min(preferredOffset, noteText.length));
+  let firstMatch = -1;
+  let lastMatchEnd = -1;
+  for (const chunk of chunks) {
+    let match = noteText.indexOf(chunk, searchOffset);
+    if (match === -1 && searchOffset > 0) {
+      match = noteText.indexOf(chunk);
+    }
+    if (match === -1) {
+      return null;
+    }
+    if (firstMatch === -1) {
+      firstMatch = match;
+    }
+    lastMatchEnd = match + chunk.length;
+    searchOffset = lastMatchEnd;
+  }
+  const fromOffset = findLineStart(noteText, firstMatch);
+  const toOffset = findLineEnd(noteText, lastMatchEnd);
+  const tableRange = expandTableRange(noteText, fromOffset, toOffset);
+  if (tableRange) {
+    return {
+      fromOffset: tableRange.fromOffset,
+      toOffset: tableRange.toOffset,
+      sourceText: noteText.slice(tableRange.fromOffset, tableRange.toOffset),
+      targetText,
+      kind: "table-rows"
+    };
+  }
+  return {
+    fromOffset,
+    toOffset,
+    sourceText: noteText.slice(fromOffset, toOffset),
+    targetText,
+    kind: "line-span"
+  };
+}
+function getInlineEditDraftOriginalText(input) {
+  if (input.sourceText && input.sourceText !== input.targetText) {
+    return input.sourceText;
+  }
+  return input.targetText;
+}
 function isContinuousSelection(selections) {
   return selections.length === 1 && comparePositions(selections[0].anchor, selections[0].head) !== 0;
 }
@@ -337,21 +640,81 @@ function getParagraphRangeAtCursor(lines, cursor) {
 function buildInlineEditPrompt(input) {
   const instruction = getActionInstruction(input.action);
   const targetLabel = input.action.mode === "note" ? "\u5F53\u524D\u7B14\u8BB0" : "\u76EE\u6807\u6587\u672C";
+  const wikiTitles = input.action.id === "wiki-link" ? formatWikiTitleList(input.vaultNoteTitles ?? []) : "";
+  const tableInstruction = input.sourceText && isMarkdownTableSource(input.sourceText) ? "\u8FD9\u662F Markdown \u8868\u683C\u6E90\u7801\u8303\u56F4\u3002\u8FD4\u56DE\u53EF\u4EE5\u76F4\u63A5\u66FF\u6362\u8BE5\u8303\u56F4\u7684 Markdown \u8868\u683C\u6E90\u7801\uFF1B\u4FDD\u6301\u8868\u683C\u7ED3\u6784\u6709\u6548\uFF0C\u5305\u542B\u5FC5\u8981\u7684\u8868\u5934\u548C\u5206\u9694\u884C\uFF0C\u4E0D\u8981\u8F93\u51FA\u89E3\u91CA\u3002" : "";
   const parts = [
-    "\u4F60\u662F Obsidian \u91CC\u7684 Hermes inline edit\u3002\u53EA\u8FD4\u56DE\u53EF\u4EE5\u76F4\u63A5\u5199\u5165\u7B14\u8BB0\u7684 Markdown \u6B63\u6587\u3002",
+    input.action.id === "html" ? "\u4F60\u662F Obsidian \u91CC\u7684 Hermes inline edit\u3002\u53EA\u8FD4\u56DE\u53EF\u4EE5\u76F4\u63A5\u5199\u5165\u7B14\u8BB0\u7684 HTML \u6B63\u6587\u3002" : "\u4F60\u662F Obsidian \u91CC\u7684 Hermes inline edit\u3002\u53EA\u8FD4\u56DE\u53EF\u4EE5\u76F4\u63A5\u5199\u5165\u7B14\u8BB0\u7684 Markdown \u6B63\u6587\u3002",
     "\u4E0D\u8981\u5BD2\u6684\uFF0C\u4E0D\u8981\u89E3\u91CA\uFF0C\u4E0D\u8981\u5305\u88F9\u4EE3\u7801\u5757\uFF0C\u4E0D\u8981\u6DFB\u52A0\u201C\u4EE5\u4E0B\u662F\u201D\u7B49\u524D\u7F00\u3002",
     instruction,
+    tableInstruction,
+    wikiTitles ? `## \u53EF\u7528 Wiki \u7B14\u8BB0\u6807\u9898
+${wikiTitles}` : "",
     input.noteTitle ? `\u7B14\u8BB0\u6807\u9898\uFF1A${input.noteTitle}` : "",
+    input.noteContext ? `## \u5F53\u524D\u7B14\u8BB0\u4E0A\u4E0B\u6587
+${input.noteContext}` : "",
     input.noteText ? `## \u5F53\u524D\u7B14\u8BB0
 ${input.noteText}` : "",
+    input.sourceText && input.sourceText !== input.targetText ? `## \u539F\u59CB Markdown \u6E90\u7801\u8303\u56F4
+${input.sourceText}` : "",
     `## ${targetLabel}
 ${input.targetText || "(\u5149\u6807\u4F4D\u7F6E\uFF0C\u65E0\u9009\u533A)"}`,
+    input.customInstruction ? `## \u7528\u6237\u81EA\u5B9A\u4E49\u8981\u6C42
+${input.customInstruction}` : "",
     input.currentProposal ? `## \u5F53\u524D\u5019\u9009\u7A3F
 ${input.currentProposal}` : "",
     input.followUp ? `## \u8FFD\u95EE\u8981\u6C42
 ${input.followUp}` : ""
   ].filter(Boolean);
   return parts.join("\n\n");
+}
+function resolveSelectionSourceRange(noteText, selectedText, preferredOffset = 0, mode = "source") {
+  const exactRange = findInlineEditSourceRange(noteText, selectedText, preferredOffset);
+  if (mode === "source") {
+    return exactRange;
+  }
+  if (exactRange) {
+    const expandedRange = expandPreviewSourceRange(noteText, exactRange.fromOffset, exactRange.toOffset);
+    const tableRange = expandTableRange(noteText, expandedRange.fromOffset, expandedRange.toOffset);
+    if (tableRange) {
+      return {
+        fromOffset: tableRange.fromOffset,
+        toOffset: tableRange.toOffset,
+        sourceText: noteText.slice(tableRange.fromOffset, tableRange.toOffset),
+        targetText: normalizeSelectedText(selectedText),
+        kind: "table-rows"
+      };
+    }
+    return {
+      fromOffset: expandedRange.fromOffset,
+      toOffset: expandedRange.toOffset,
+      sourceText: noteText.slice(expandedRange.fromOffset, expandedRange.toOffset),
+      targetText: normalizeSelectedText(selectedText),
+      kind: exactRange.kind
+    };
+  }
+  return findPreviewSelectionSourceRange(noteText, selectedText, preferredOffset);
+}
+function buildSelectionContextWindow(input) {
+  const noteText = input.noteText.trim();
+  if (!noteText) {
+    return "";
+  }
+  const resolvedRange = typeof input.fromOffset === "number" && typeof input.toOffset === "number" ? {
+    fromOffset: input.fromOffset,
+    toOffset: input.toOffset
+  } : input.selectedText ? resolveSelectionSourceRange(
+    noteText,
+    input.selectedText,
+    input.preferredOffset ?? 0,
+    input.mode ?? "source"
+  ) : null;
+  if (!resolvedRange) {
+    return trimContextSnippet(noteText, input.maxCharacters ?? 1800);
+  }
+  return extractContextWindow(noteText, resolvedRange.fromOffset, resolvedRange.toOffset, {
+    windowLines: input.windowLines ?? 6,
+    maxCharacters: input.maxCharacters ?? 1800
+  });
 }
 function transitionInlineDraft(draft, event, payload = {}) {
   if (event === "cancel") {
@@ -384,6 +747,10 @@ function getActionInstruction(action) {
   switch (action.id) {
     case "polish":
       return "\u4EFB\u52A1\uFF1A\u6DA6\u8272\u76EE\u6807\u6587\u672C\uFF0C\u4FDD\u6301\u539F\u610F\u548C\u4FE1\u606F\u5BC6\u5EA6\uFF0C\u8BA9\u8868\u8FBE\u66F4\u81EA\u7136\u3001\u6709\u8D28\u611F\u3002";
+    case "format":
+      return "\u4EFB\u52A1\uFF1A\u53EA\u6574\u7406\u76EE\u6807\u6587\u672C\u7684\u683C\u5F0F\u548C\u7ED3\u6784\uFF0C\u4FDD\u7559\u539F\u610F\uFF0C\u4E0D\u8981\u6539\u5185\u5BB9\uFF0C\u5C3D\u91CF\u4E0D\u6539\u8BED\u4E49\u3002\u4F18\u5148\u4FEE\u590D Markdown \u6392\u7248\u3001\u6807\u9898\u3001\u5217\u8868\u3001\u8868\u683C\u3001callout \u548C Mermaid \u8BED\u6CD5\uFF0C\u8BA9\u5B83\u66F4\u9002\u5408 Obsidian \u9605\u8BFB\u3002";
+    case "html":
+      return "\u4EFB\u52A1\uFF1A\u628A\u76EE\u6807\u6587\u672C\u8F6C\u6210 Obsidian \u53EF\u76F4\u63A5\u4F7F\u7528\u7684\u7EAF HTML\u3002\u53EA\u8F93\u51FA HTML \u6807\u7B7E\u548C\u6587\u672C\uFF0C\u4E0D\u8981\u6DF7\u5165 Markdown\uFF0C\u4E0D\u8981\u89E3\u91CA\u3002";
     case "clarify":
       return "\u4EFB\u52A1\uFF1A\u628A\u76EE\u6807\u6587\u672C\u6539\u5F97\u66F4\u6E05\u695A\uFF0C\u8865\u8DB3\u5FC5\u8981\u8FDE\u63A5\u8BCD\uFF0C\u53BB\u6389\u542B\u6DF7\u548C\u7ED5\u5F2F\u3002";
     case "shorten":
@@ -391,7 +758,9 @@ function getActionInstruction(action) {
     case "translate":
       return "\u4EFB\u52A1\uFF1A\u7FFB\u8BD1\u76EE\u6807\u6587\u672C\u3002\u4E2D\u6587\u7FFB\u6210\u81EA\u7136\u82F1\u6587\uFF0C\u82F1\u6587\u7FFB\u6210\u81EA\u7136\u4E2D\u6587\u3002";
     case "wiki-link":
-      return "\u4EFB\u52A1\uFF1A\u5728\u76EE\u6807\u6587\u672C\u4E2D\u81EA\u7136\u7A7F\u63D2 Obsidian Wiki \u94FE\u63A5\uFF0C\u683C\u5F0F\u4F7F\u7528 [[\u6982\u5FF5]]\uFF0C\u4E0D\u8981\u4E3A\u4E86\u94FE\u63A5\u800C\u7834\u574F\u53E5\u5B50\u3002";
+      return "\u4EFB\u52A1\uFF1A\u5728\u76EE\u6807\u6587\u672C\u4E2D\u81EA\u7136\u7A7F\u63D2 Obsidian Wiki \u94FE\u63A5\u3002\u53EA\u80FD\u4F7F\u7528\u4E0B\u65B9\u771F\u5B9E\u5B58\u5728\u7684\u7B14\u8BB0\u6807\u9898\uFF0C\u683C\u5F0F\u5FC5\u987B\u662F [[\u771F\u5B9E\u7B14\u8BB0\u6807\u9898]]\uFF1B\u4E0D\u8981\u521B\u9020\u5217\u8868\u5916\u7684\u65B0\u94FE\u63A5\u3002\u6CA1\u6709\u5408\u9002\u7B14\u8BB0\u65F6\u4E0D\u8981\u6DFB\u52A0 Wiki \u94FE\u63A5\u3002";
+    case "custom":
+      return "\u4EFB\u52A1\uFF1A\u4E25\u683C\u6309\u7528\u6237\u81EA\u5B9A\u4E49\u8981\u6C42\u5904\u7406\u76EE\u6807\u6587\u672C\uFF1B\u8F93\u51FA\u5FC5\u987B\u662F\u53EF\u76F4\u63A5\u5199\u5165\u7B14\u8BB0\u7684 Markdown \u6B63\u6587\u3002";
     case "continue":
       return "\u4EFB\u52A1\uFF1A\u6CBF\u7740\u76EE\u6807\u6587\u672C\u6216\u5149\u6807\u524D\u4E0A\u4E0B\u6587\u7EED\u5199\u4E00\u5C0F\u6BB5\uFF0C\u8BED\u6C14\u548C\u7ED3\u6784\u4FDD\u6301\u4E00\u81F4\u3002";
     case "summarize":
@@ -404,8 +773,507 @@ function getActionInstruction(action) {
       return `\u4EFB\u52A1\uFF1A${action.description}`;
   }
 }
+function normalizeForSearch(value) {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+function normalizeSelectedText(value) {
+  return value.replace(/\u00a0/g, " ").replace(/\r\n?/g, "\n").trim();
+}
+function findClosestIndex(source, target, preferredOffset) {
+  let best = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let index = source.indexOf(target);
+  while (index !== -1) {
+    const distance = Math.abs(index - preferredOffset);
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+    index = source.indexOf(target, index + target.length);
+  }
+  return best;
+}
+function findLineStart(source, offset) {
+  const lineStart = source.lastIndexOf("\n", Math.max(0, offset - 1));
+  return lineStart === -1 ? 0 : lineStart + 1;
+}
+function findLineEnd(source, offset) {
+  const lineEnd = source.indexOf("\n", offset);
+  return lineEnd === -1 ? source.length : lineEnd;
+}
+function formatWikiTitleList(titles) {
+  if (titles.length === 0) {
+    return "- \u6CA1\u6709\u53EF\u7528\u6807\u9898\u3002\u6B64\u65F6\u4E0D\u8981\u6DFB\u52A0\u4EFB\u4F55 Wiki \u94FE\u63A5\u3002";
+  }
+  return titles.map((title) => `- [[${title}]]`).join("\n");
+}
+function isMarkdownTableSource(value) {
+  const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.some(isLikelyMarkdownTableLine);
+}
+function expandTableRange(source, fromOffset, toOffset) {
+  const lines = source.split("\n");
+  const starts = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  const startLine = getLineIndexForOffset(starts, fromOffset);
+  const endLine = getLineIndexForOffset(starts, Math.max(fromOffset, toOffset - 1));
+  const selectedLines = lines.slice(startLine, endLine + 1);
+  if (!selectedLines.some(isLikelyMarkdownTableLine)) {
+    return null;
+  }
+  let tableStart = startLine;
+  let tableEnd = endLine;
+  while (tableStart > 0 && isLikelyMarkdownTableLine(lines[tableStart - 1])) {
+    tableStart -= 1;
+  }
+  while (tableEnd < lines.length - 1 && isLikelyMarkdownTableLine(lines[tableEnd + 1])) {
+    tableEnd += 1;
+  }
+  const rangeStart = starts[tableStart] ?? fromOffset;
+  const lastLineStart = starts[tableEnd] ?? toOffset;
+  return {
+    fromOffset: rangeStart,
+    toOffset: lastLineStart + (lines[tableEnd]?.length ?? 0)
+  };
+}
+function getLineIndexForOffset(starts, offset) {
+  let line = 0;
+  for (let index = 0; index < starts.length; index += 1) {
+    if (starts[index] <= offset) {
+      line = index;
+    } else {
+      break;
+    }
+  }
+  return line;
+}
+function isLikelyMarkdownTableLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) {
+    return false;
+  }
+  const cells = trimmed.split("|").map((cell) => cell.trim());
+  return cells.filter(Boolean).length >= 2;
+}
+function findPreviewSelectionSourceRange(noteText, selectedText, preferredOffset = 0) {
+  const targetText = normalizeSelectionSearchText(selectedText);
+  const displayText = normalizeSelectedText(selectedText);
+  if (!targetText) {
+    return null;
+  }
+  const rendered = buildRenderedSelectionIndex(noteText);
+  const renderedIndex = findClosestRenderedIndex(rendered.text, targetText, preferredOffset, rendered.sourceOffsets);
+  if (renderedIndex === null) {
+    return null;
+  }
+  const fromOffset = rendered.sourceOffsets[renderedIndex] ?? 0;
+  const toRenderedIndex = renderedIndex + targetText.length - 1;
+  const toOffset = (rendered.sourceOffsets[toRenderedIndex] ?? fromOffset) + 1;
+  const expandedRange = expandPreviewSourceRange(noteText, fromOffset, toOffset);
+  const tableRange = expandTableRange(noteText, expandedRange.fromOffset, expandedRange.toOffset);
+  if (tableRange) {
+    return {
+      fromOffset: tableRange.fromOffset,
+      toOffset: tableRange.toOffset,
+      sourceText: noteText.slice(tableRange.fromOffset, tableRange.toOffset),
+      targetText: displayText,
+      kind: "table-rows"
+    };
+  }
+  return {
+    fromOffset: expandedRange.fromOffset,
+    toOffset: expandedRange.toOffset,
+    sourceText: noteText.slice(expandedRange.fromOffset, expandedRange.toOffset),
+    targetText: displayText,
+    kind: "line-span"
+  };
+}
+function expandPreviewSourceRange(noteText, fromOffset, toOffset) {
+  const currentLineStart = findLineStart(noteText, fromOffset);
+  const currentLineEnd = findLineEnd(noteText, toOffset);
+  const lineText = noteText.slice(currentLineStart, currentLineEnd);
+  const localFrom = Math.max(0, fromOffset - currentLineStart);
+  const localTo = Math.max(0, toOffset - currentLineStart);
+  const wikiStart = lineText.lastIndexOf("[[", localFrom);
+  const wikiEnd = lineText.indexOf("]]", localTo);
+  if (wikiStart !== -1 && wikiEnd !== -1 && wikiStart < localFrom) {
+    return {
+      fromOffset: currentLineStart + wikiStart,
+      toOffset: currentLineStart + wikiEnd + 2
+    };
+  }
+  const linkStart = lineText.lastIndexOf("[", localFrom);
+  const linkMarker = lineText.indexOf("](", localTo);
+  const linkEnd = linkMarker === -1 ? -1 : lineText.indexOf(")", linkMarker + 2);
+  if (linkStart !== -1 && linkMarker !== -1 && linkEnd !== -1 && linkStart < localFrom) {
+    return {
+      fromOffset: currentLineStart + linkStart,
+      toOffset: currentLineStart + linkEnd + 1
+    };
+  }
+  for (const marker of ["**", "__", "~~", "``", "*", "_"]) {
+    const markerStart = lineText.lastIndexOf(marker, localFrom);
+    const markerEnd = lineText.indexOf(marker, localTo);
+    if (markerStart !== -1 && markerEnd !== -1 && markerStart < localFrom) {
+      return {
+        fromOffset: currentLineStart + markerStart,
+        toOffset: currentLineStart + markerEnd + marker.length
+      };
+    }
+  }
+  return { fromOffset, toOffset };
+}
+function buildRenderedSelectionIndex(source) {
+  const textParts = [];
+  const sourceOffsets = [];
+  let index = 0;
+  let inFence = false;
+  while (index < source.length) {
+    const lineEnd = source.indexOf("\n", index);
+    const rawLine = source.slice(index, lineEnd === -1 ? source.length : lineEnd);
+    const nextIndex = lineEnd === -1 ? source.length : lineEnd + 1;
+    const isLineStart = index === 0 || source[index - 1] === "\n";
+    if (/^\s*(```|~~~)/.test(rawLine)) {
+      inFence = !inFence;
+      index = nextIndex;
+      continue;
+    }
+    if (inFence) {
+      appendRenderedLine(textParts, sourceOffsets, rawLine, index, { preserveFormatting: true });
+    } else {
+      const stripped = stripMarkdownLinePrefix(rawLine, isLineStart);
+      appendRenderedLine(textParts, sourceOffsets, stripped.text, index + stripped.sourceOffset, {
+        treatTablePipesAsSpaces: stripped.isTable
+      });
+    }
+    if (lineEnd !== -1) {
+      appendWhitespaceIfNeeded(textParts, sourceOffsets, lineEnd, textParts.length > 0 && /\s/.test(textParts[textParts.length - 1] ?? ""));
+    }
+    index = nextIndex;
+  }
+  return {
+    text: textParts.join(""),
+    sourceOffsets
+  };
+}
+function stripMarkdownLinePrefix(line, isLineStart) {
+  if (!isLineStart) {
+    return { text: line, sourceOffset: 0, isTable: isLikelyMarkdownTableLine(line) };
+  }
+  let cursor = 0;
+  while (cursor < line.length && /\s/.test(line[cursor] ?? "")) {
+    cursor += 1;
+  }
+  const headingMatch = line.slice(cursor).match(/^(#{1,6})\s+/);
+  if (headingMatch) {
+    cursor += headingMatch[0].length;
+  }
+  const quoteMatch = line.slice(cursor).match(/^(?:>\s*)+/);
+  if (quoteMatch) {
+    cursor += quoteMatch[0].length;
+  }
+  const taskMatch = line.slice(cursor).match(/^(?:[-*+]\s+\[[ xX]\]\s*|[-*+]\s+|\d+[.)]\s+)/);
+  if (taskMatch) {
+    cursor += taskMatch[0].length;
+  }
+  const isTable = isLikelyMarkdownTableLine(line);
+  if (isTable) {
+    return {
+      text: line.replace(/\|/g, " "),
+      sourceOffset: 0,
+      isTable: true
+    };
+  }
+  return {
+    text: line.slice(cursor),
+    sourceOffset: cursor,
+    isTable: false
+  };
+}
+function appendRenderedLine(textParts, sourceOffsets, line, lineSourceOffset, options = {}) {
+  let lastWasSpace = textParts.length > 0 && /\s/.test(textParts[textParts.length - 1] ?? "");
+  let index = 0;
+  while (index < line.length) {
+    const char = line[index] ?? "";
+    const sourceOffset = lineSourceOffset + index;
+    if (options.treatTablePipesAsSpaces && char === "|") {
+      appendWhitespaceIfNeeded(textParts, sourceOffsets, sourceOffset, lastWasSpace);
+      lastWasSpace = true;
+      index += 1;
+      continue;
+    }
+    if (!options.preserveFormatting && isFormattingMarker(line, index)) {
+      index += skipFormattingMarker(line, index);
+      continue;
+    }
+    if (!options.preserveFormatting && char === "\\") {
+      const nextChar = line[index + 1];
+      if (nextChar) {
+        appendRenderedChar(textParts, sourceOffsets, nextChar, sourceOffset + 1);
+        lastWasSpace = false;
+        index += 2;
+        continue;
+      }
+    }
+    if (!options.preserveFormatting && char === "!" && line[index + 1] === "[") {
+      const image = parseVisibleLink(line, index + 1, lineSourceOffset);
+      if (image) {
+        appendText(textParts, sourceOffsets, image.text, image.sourceOffsets);
+        lastWasSpace = textParts.length > 0 && /\s/.test(textParts[textParts.length - 1] ?? "");
+        index = image.endIndex;
+        continue;
+      }
+    }
+    if (!options.preserveFormatting && char === "[") {
+      const link = parseVisibleLink(line, index, lineSourceOffset);
+      if (link) {
+        appendText(textParts, sourceOffsets, link.text, link.sourceOffsets);
+        lastWasSpace = textParts.length > 0 && /\s/.test(textParts[textParts.length - 1] ?? "");
+        index = link.endIndex;
+        continue;
+      }
+    }
+    if (!options.preserveFormatting && char === "<") {
+      const tagEnd = line.indexOf(">", index + 1);
+      if (tagEnd !== -1 && looksLikeHtmlTag(line.slice(index, tagEnd + 1))) {
+        index = tagEnd + 1;
+        continue;
+      }
+    }
+    if (!options.preserveFormatting && char === "`") {
+      const code = parseInlineCode(line, index, lineSourceOffset);
+      if (code) {
+        appendText(textParts, sourceOffsets, code.text, code.sourceOffsets);
+        lastWasSpace = textParts.length > 0 && /\s/.test(textParts[textParts.length - 1] ?? "");
+        index = code.endIndex;
+        continue;
+      }
+    }
+    if (!options.preserveFormatting && char === "[" && line[index + 1] === "[") {
+      const wiki = parseWikiLink(line, index, lineSourceOffset);
+      if (wiki) {
+        appendText(textParts, sourceOffsets, wiki.text, wiki.sourceOffsets);
+        lastWasSpace = textParts.length > 0 && /\s/.test(textParts[textParts.length - 1] ?? "");
+        index = wiki.endIndex;
+        continue;
+      }
+    }
+    if (/\s/.test(char)) {
+      appendWhitespaceIfNeeded(textParts, sourceOffsets, sourceOffset, lastWasSpace);
+      lastWasSpace = true;
+      index += 1;
+      continue;
+    }
+    appendRenderedChar(textParts, sourceOffsets, char, sourceOffset);
+    lastWasSpace = false;
+    index += 1;
+  }
+}
+function appendWhitespaceIfNeeded(textParts, sourceOffsets, sourceOffset, lastWasSpace) {
+  if (lastWasSpace) {
+    return;
+  }
+  appendRenderedChar(textParts, sourceOffsets, " ", sourceOffset);
+}
+function appendRenderedChar(textParts, sourceOffsets, char, sourceOffset) {
+  if (!char) {
+    return;
+  }
+  textParts.push(char);
+  sourceOffsets.push(sourceOffset);
+}
+function appendText(textParts, sourceOffsets, text, offsets) {
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? "";
+    const offset = offsets[index];
+    if (offset === void 0) {
+      continue;
+    }
+    appendRenderedChar(textParts, sourceOffsets, char, offset);
+  }
+}
+function skipFormattingMarker(line, index) {
+  const char = line[index];
+  if (!char) {
+    return 1;
+  }
+  if (char === "*" || char === "_" || char === "~") {
+    let length = 1;
+    while (line[index + length] === char) {
+      length += 1;
+    }
+    return length;
+  }
+  return 1;
+}
+function isFormattingMarker(line, index) {
+  const char = line[index];
+  if (!char) {
+    return false;
+  }
+  return char === "*" || char === "_" || char === "~";
+}
+function parseVisibleLink(line, startIndex, lineSourceOffset) {
+  if (line[startIndex] !== "[") {
+    return null;
+  }
+  const closeIndex = findMatchingBracket(line, startIndex + 1);
+  if (closeIndex === -1) {
+    return null;
+  }
+  const inner = line.slice(startIndex + 1, closeIndex);
+  const nextChar = line[closeIndex + 1];
+  if (nextChar !== "(") {
+    return line[startIndex + 1] === "[" ? parseWikiLink(line, startIndex, lineSourceOffset) : {
+      text: inner,
+      sourceOffsets: Array.from({ length: inner.length }, (_, itemIndex) => lineSourceOffset + startIndex + 1 + itemIndex),
+      endIndex: closeIndex + 1
+    };
+  }
+  const endParen = findMatchingParen(line, closeIndex + 1);
+  if (endParen === -1) {
+    return null;
+  }
+  const text = inner.replace(/^!/, "").split("|").pop() ?? inner;
+  return {
+    text,
+    sourceOffsets: Array.from({ length: text.length }, (_, itemIndex) => lineSourceOffset + startIndex + 1 + itemIndex),
+    endIndex: endParen + 1
+  };
+}
+function parseWikiLink(line, startIndex, lineSourceOffset) {
+  if (line[startIndex] !== "[" || line[startIndex + 1] !== "[") {
+    return null;
+  }
+  const endIndex = line.indexOf("]]", startIndex + 2);
+  if (endIndex === -1) {
+    return null;
+  }
+  const inner = line.slice(startIndex + 2, endIndex);
+  const display = inner.includes("|") ? inner.split("|").pop() ?? inner : inner;
+  return {
+    text: display,
+    sourceOffsets: Array.from({ length: display.length }, (_, itemIndex) => lineSourceOffset + startIndex + 2 + itemIndex),
+    endIndex: endIndex + 2
+  };
+}
+function parseInlineCode(line, startIndex, lineSourceOffset) {
+  let fenceLength = 0;
+  while (line[startIndex + fenceLength] === "`") {
+    fenceLength += 1;
+  }
+  if (fenceLength === 0) {
+    return null;
+  }
+  const closing = line.indexOf("`".repeat(fenceLength), startIndex + fenceLength);
+  if (closing === -1) {
+    return null;
+  }
+  const content = line.slice(startIndex + fenceLength, closing);
+  return {
+    text: content,
+    sourceOffsets: Array.from({ length: content.length }, (_, itemIndex) => lineSourceOffset + startIndex + fenceLength + itemIndex),
+    endIndex: closing + fenceLength
+  };
+}
+function findMatchingBracket(line, startIndex) {
+  let depth = 0;
+  for (let index = startIndex; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (char === "[") {
+      depth += 1;
+      continue;
+    }
+    if (char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+function findMatchingParen(line, startIndex) {
+  let depth = 0;
+  for (let index = startIndex; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+function looksLikeHtmlTag(value) {
+  return /^<\/?[A-Za-z][^>]*>$/.test(value.trim());
+}
+function normalizeSelectionSearchText(value) {
+  return normalizeSelectedText(value).replace(/\s+/g, " ");
+}
+function findClosestRenderedIndex(renderedText, targetText, preferredOffset, sourceOffsets) {
+  let bestIndex = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let searchIndex = renderedText.indexOf(targetText);
+  while (searchIndex !== -1) {
+    const sourceOffset = sourceOffsets[searchIndex];
+    if (sourceOffset !== void 0) {
+      const distance = Math.abs(sourceOffset - preferredOffset);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = searchIndex;
+      }
+    }
+    searchIndex = renderedText.indexOf(targetText, searchIndex + 1);
+  }
+  return bestIndex;
+}
+function extractContextWindow(noteText, fromOffset, toOffset, options) {
+  if (!noteText.trim()) {
+    return "";
+  }
+  const lines = noteText.split("\n");
+  const starts = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  const fromLine = getLineIndexForOffset(starts, fromOffset);
+  const toLine = getLineIndexForOffset(starts, Math.max(fromOffset, toOffset - 1));
+  const startLine = Math.max(0, fromLine - options.windowLines);
+  const endLine = Math.min(lines.length - 1, toLine + options.windowLines);
+  return trimContextSnippet(lines.slice(startLine, endLine + 1).join("\n"), options.maxCharacters);
+}
+function trimContextSnippet(text, maxCharacters) {
+  const normalized = text.trim();
+  if (normalized.length <= maxCharacters) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxCharacters - 1)).trimEnd()}\u2026`;
+}
 
 // src/inline-edit.ts
+var import_obsidian = require("obsidian");
+var import_state = require("@codemirror/state");
+var import_view = require("@codemirror/view");
 var setInlineEditDraftEffect = import_state.StateEffect.define();
 var inlineEditDraftField = import_state.StateField.define({
   create: () => null,
@@ -466,7 +1334,10 @@ var InlineEditManager = class {
     options.plugin.registerEditorSuggest(this.slashSuggest);
     options.plugin.registerEditorExtension(createInlineEditExtension());
     options.plugin.registerDomEvent(document, "selectionchange", () => this.scheduleSelectionToolbar());
+    options.plugin.registerDomEvent(document, "keyup", () => this.scheduleSelectionToolbar());
     options.plugin.registerDomEvent(document, "pointerup", () => this.scheduleSelectionToolbar());
+    options.plugin.registerDomEvent(window, "scroll", () => this.scheduleSelectionToolbar(), true);
+    options.plugin.registerDomEvent(window, "resize", () => this.scheduleSelectionToolbar());
     options.plugin.registerDomEvent(document, "keydown", (event) => {
       if (event.key === "Escape") {
         this.cancelDraft();
@@ -494,6 +1365,7 @@ var InlineEditManager = class {
         if (!(info instanceof import_obsidian.MarkdownView)) {
           this.hideSelectionToolbar();
         }
+        this.scheduleSelectionToolbar();
       })
     );
   }
@@ -527,6 +1399,13 @@ var InlineEditManager = class {
     }
     this.hideSelectionToolbar();
     const requestContext = this.buildRequestContextFromSelection(action, selectionContext);
+    if (action.id === "custom") {
+      const customInstruction = await this.promptForCustomInstruction();
+      if (!customInstruction) {
+        return;
+      }
+      requestContext.customInstruction = customInstruction;
+    }
     await this.startRequest(requestContext);
   }
   scheduleSelectionToolbar() {
@@ -550,7 +1429,7 @@ var InlineEditManager = class {
     }
     if (!this.selectionToolbarEl) {
       this.selectionToolbarEl = document.body.createDiv({ cls: "hermes-inline-toolbar" });
-      for (const action of INLINE_EDIT_ACTIONS) {
+      for (const action of getInlineEditToolbarActions(INLINE_EDIT_ACTIONS)) {
         const button = this.selectionToolbarEl.createEl("button", {
           cls: "hermes-inline-toolbar-button",
           text: action.shortLabel,
@@ -560,12 +1439,14 @@ var InlineEditManager = class {
         button.addEventListener("click", () => void this.runSelectionAction(action.id));
       }
     }
-    const rect = context.view.coordsAtPos(context.toOffset, 1) ?? context.view.coordsAtPos(context.fromOffset, -1);
+    const rect = context.rect;
     if (!rect) {
       this.hideSelectionToolbar();
       return;
     }
-    this.selectionToolbarEl.style.left = `${Math.max(12, rect.left - 48)}px`;
+    const toolbarWidth = this.selectionToolbarEl.offsetWidth || 420;
+    const left = Math.min(window.innerWidth - toolbarWidth - 12, Math.max(12, rect.left - 48));
+    this.selectionToolbarEl.style.left = `${Math.max(12, left)}px`;
     this.selectionToolbarEl.style.top = `${Math.max(12, rect.top - 52)}px`;
     this.selectionToolbarEl.addClass("is-visible");
   }
@@ -575,40 +1456,158 @@ var InlineEditManager = class {
   }
   getSelectionContext() {
     const markdownView = this.options.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-    if (!markdownView || markdownView.getMode() !== "source" || !markdownView.file) {
+    if (!markdownView || !markdownView.file) {
       return null;
     }
+    const mode = markdownView.getMode() === "preview" ? "preview" : "source";
     const editor = markdownView.editor;
-    const selections = editor.listSelections();
-    if (selections.length !== 1) {
+    const noteText = markdownView.getViewData?.() ?? editor.getValue();
+    if (mode === "source") {
+      const selections = editor.listSelections();
+      if (selections.length === 1 && isContinuousSelection(selections)) {
+        const selection = selections[0];
+        const [from2, to2] = comparePositions(selection.anchor, selection.head) <= 0 ? [selection.anchor, selection.head] : [selection.head, selection.anchor];
+        const text = editor.getRange(from2, to2);
+        if (!text.trim()) {
+          return null;
+        }
+        const view = this.findEditorView(markdownView);
+        const fromOffset = editor.posToOffset(from2);
+        const toOffset = editor.posToOffset(to2);
+        const rect2 = view?.coordsAtPos(toOffset, 1) ?? view?.coordsAtPos(fromOffset, -1);
+        if (!rect2 || !view) {
+          return null;
+        }
+        const noteContext2 = buildSelectionContextWindow({
+          noteText,
+          fromOffset,
+          toOffset,
+          selectedText: text,
+          mode,
+          windowLines: 6,
+          maxCharacters: 1800
+        });
+        return {
+          editor,
+          markdownView,
+          file: markdownView.file,
+          mode,
+          rect: {
+            left: rect2.left,
+            top: rect2.top,
+            right: rect2.right,
+            bottom: rect2.bottom
+          },
+          from: from2,
+          to: to2,
+          fromOffset,
+          toOffset,
+          text,
+          noteText,
+          noteContext: noteContext2
+        };
+      }
       if (selections.length > 1) {
         this.noticeMultipleSelections();
+        return null;
+      }
+      const domSelection2 = window.getSelection();
+      if (domSelection2 && !domSelection2.isCollapsed && domSelection2.rangeCount === 1) {
+        const view = this.findEditorView(markdownView);
+        if (!view || !this.selectionBelongsToContainer(domSelection2, view.dom)) {
+          return null;
+        }
+        const selectedText2 = domSelection2.toString().trim();
+        if (!selectedText2) {
+          return null;
+        }
+        const cursorOffset = editor.posToOffset(editor.getCursor());
+        const sourceRange2 = findInlineEditSourceRange(noteText, selectedText2, cursorOffset);
+        if (!sourceRange2) {
+          return null;
+        }
+        const from2 = editor.offsetToPos(sourceRange2.fromOffset);
+        const to2 = editor.offsetToPos(sourceRange2.toOffset);
+        const rect2 = domSelection2.getRangeAt(0).getBoundingClientRect();
+        const noteContext2 = buildSelectionContextWindow({
+          noteText,
+          fromOffset: sourceRange2.fromOffset,
+          toOffset: sourceRange2.toOffset,
+          selectedText: sourceRange2.targetText,
+          mode,
+          windowLines: 6,
+          maxCharacters: 1800
+        });
+        return {
+          editor,
+          markdownView,
+          file: markdownView.file,
+          mode,
+          rect: {
+            left: rect2.left,
+            top: rect2.top,
+            right: rect2.right,
+            bottom: rect2.bottom
+          },
+          from: from2,
+          to: to2,
+          fromOffset: sourceRange2.fromOffset,
+          toOffset: sourceRange2.toOffset,
+          text: sourceRange2.targetText,
+          noteText,
+          noteContext: noteContext2
+        };
       }
       return null;
     }
-    if (!isContinuousSelection(selections)) {
+    const domSelection = window.getSelection();
+    if (!domSelection || domSelection.isCollapsed || domSelection.rangeCount !== 1) {
       return null;
     }
-    const selection = selections[0];
-    const [from, to] = comparePositions(selection.anchor, selection.head) <= 0 ? [selection.anchor, selection.head] : [selection.head, selection.anchor];
-    const text = editor.getRange(from, to);
-    if (!text.trim()) {
+    const previewContainer = markdownView.previewMode?.containerEl ?? markdownView.containerEl;
+    if (!this.selectionBelongsToContainer(domSelection, previewContainer)) {
       return null;
     }
-    const view = this.findEditorView(markdownView);
-    if (!view) {
+    const selectedText = domSelection.toString().trim();
+    if (!selectedText) {
       return null;
     }
+    const preferredOffset = editor.posToOffset(editor.getCursor());
+    const sourceRange = resolveSelectionSourceRange(noteText, selectedText, preferredOffset, "preview");
+    if (!sourceRange) {
+      new import_obsidian.Notice("\u9605\u8BFB\u6A21\u5F0F\u9009\u533A\u6682\u65F6\u65E0\u6CD5\u6620\u5C04\u5230\u6E90\u7801\uFF0C\u8BF7\u5207\u6362\u5230\u6E90\u7801\u6A21\u5F0F\u540E\u518D\u8BD5\u3002");
+      return null;
+    }
+    const from = editor.offsetToPos(sourceRange.fromOffset);
+    const to = editor.offsetToPos(sourceRange.toOffset);
+    const rect = domSelection.getRangeAt(0).getBoundingClientRect();
+    const noteContext = buildSelectionContextWindow({
+      noteText,
+      fromOffset: sourceRange.fromOffset,
+      toOffset: sourceRange.toOffset,
+      selectedText: sourceRange.targetText,
+      mode,
+      windowLines: 6,
+      maxCharacters: 1800
+    });
     return {
-      view,
       editor,
       markdownView,
       file: markdownView.file,
+      mode,
+      rect: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom
+      },
       from,
       to,
-      fromOffset: editor.posToOffset(from),
-      toOffset: editor.posToOffset(to),
-      text
+      fromOffset: sourceRange.fromOffset,
+      toOffset: sourceRange.toOffset,
+      text: sourceRange.targetText,
+      noteText,
+      noteContext
     };
   }
   buildRequestContextFromSelection(action, context) {
@@ -624,7 +1623,9 @@ var InlineEditManager = class {
       fromOffset: context.editor.posToOffset(from),
       toOffset: context.editor.posToOffset(to),
       targetText: context.text,
-      noteText: context.editor.getValue(),
+      sourceText: context.editor.getRange(from, to),
+      noteText: context.noteText,
+      noteContext: context.noteContext,
       noteTitle: context.file.basename,
       mode: action.mode
     };
@@ -646,7 +1647,16 @@ var InlineEditManager = class {
       fromOffset: editor.posToOffset(from),
       toOffset: editor.posToOffset(to),
       targetText: action.mode === "note" ? noteText : paragraph?.text ?? "",
+      sourceText: action.mode === "note" ? noteText : paragraph?.text ?? "",
       noteText,
+      noteContext: buildSelectionContextWindow({
+        noteText,
+        fromOffset: editor.posToOffset(from),
+        toOffset: editor.posToOffset(to),
+        mode: "source",
+        windowLines: 6,
+        maxCharacters: 1800
+      }),
       noteTitle: file.basename,
       mode
     };
@@ -664,7 +1674,10 @@ var InlineEditManager = class {
       filePath: context.file.path,
       fromOffset: context.fromOffset,
       toOffset: context.toOffset,
-      originalText: context.targetText,
+      originalText: getInlineEditDraftOriginalText({
+        targetText: context.targetText,
+        sourceText: context.sourceText
+      }),
       proposedText: "",
       status: "generating",
       requestId
@@ -674,11 +1687,16 @@ var InlineEditManager = class {
     this.currentDraft = draft;
     this.pushDraftToView();
     const settings = this.options.getSettings();
+    const vaultNoteTitles = context.action.id === "wiki-link" ? this.getVaultNoteTitlesForWiki(context) : void 0;
     const prompt = buildInlineEditPrompt({
       action: context.action,
       targetText: context.action.mode === "note" ? "" : context.targetText,
+      sourceText: context.sourceText,
       noteText: context.action.mode === "note" ? context.noteText : void 0,
+      noteContext: context.noteContext,
       noteTitle: context.noteTitle,
+      vaultNoteTitles,
+      customInstruction: context.customInstruction,
       followUp: context.followUp,
       currentProposal: context.currentProposal
     });
@@ -799,6 +1817,27 @@ var InlineEditManager = class {
     const editorEl = markdownView.containerEl.querySelector(".cm-editor");
     return editorEl instanceof HTMLElement ? import_view.EditorView.findFromDOM(editorEl) : null;
   }
+  selectionBelongsToContainer(selection, container) {
+    const anchor = selection.anchorNode;
+    const focus = selection.focusNode;
+    return Boolean(anchor && focus && container.contains(anchor) && container.contains(focus));
+  }
+  getVaultNoteTitlesForWiki(context) {
+    const titles = this.options.app.vault.getMarkdownFiles().filter((file) => file.path !== context.file.path).map((file) => file.basename);
+    return selectVaultNoteTitlesForWikiPrompt({
+      titles,
+      targetText: `${context.targetText}
+${context.sourceText ?? ""}`,
+      noteTitle: context.noteTitle,
+      limit: 100
+    });
+  }
+  async promptForCustomInstruction() {
+    return new Promise((resolve2) => {
+      const modal = new InlineEditCustomPromptModal(this.options.app, resolve2);
+      modal.open();
+    });
+  }
   syncCurrentDraftFromView() {
     if (!this.currentView || !this.currentDraft) {
       return;
@@ -858,6 +1897,103 @@ var HermesInlineSlashSuggest = class extends import_obsidian.EditorSuggest {
       return;
     }
     void this.manager.runSlashAction(value, this.context);
+  }
+};
+var InlineEditCustomPromptModal = class {
+  constructor(_app, resolve2) {
+    this.didResolve = false;
+    this.panelEl = null;
+    this.inputEl = null;
+    this.previouslyFocusedEl = null;
+    this.outsideClickHandler = (event) => {
+      if (!this.panelEl || !(event.target instanceof Node) || this.panelEl.contains(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.dismiss(null);
+    };
+    this.keydownHandler = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.dismiss(null);
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.dismiss(this.inputEl?.value.trim() || null);
+      }
+    };
+    this.resolve = resolve2;
+  }
+  open() {
+    if (this.panelEl) {
+      return;
+    }
+    this.previouslyFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = document.body.createDiv({ cls: "hermes-inline-custom-modal" });
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "false");
+    dialog.setAttribute("aria-label", "\u81EA\u5B9A\u4E49\u63D0\u95EE");
+    const header = dialog.createDiv({ cls: "hermes-inline-custom-header" });
+    const titleWrap = header.createDiv({ cls: "hermes-inline-custom-title-wrap" });
+    titleWrap.createEl("h2", { text: "\u81EA\u5B9A\u4E49\u63D0\u95EE" });
+    titleWrap.createDiv({
+      cls: "hermes-inline-custom-hint",
+      text: "\u7528\u4E00\u53E5\u8BDD\u544A\u8BC9 Hermes \u4F60\u60F3\u600E\u4E48\u6539\u3002"
+    });
+    const closeButton = header.createEl("button", {
+      cls: "hermes-inline-custom-close",
+      text: "\xD7",
+      attr: { type: "button", "aria-label": "\u5173\u95ED" }
+    });
+    const input = dialog.createEl("textarea", {
+      cls: "hermes-inline-custom-input",
+      attr: {
+        rows: "5",
+        placeholder: "\u6BD4\u5982\uFF1A\u6574\u7406\u6210\u66F4\u6709\u529B\u91CF\u7684 Markdown\uFF1B\u628A\u8868\u683C\u6539\u6210\u66F4\u6E05\u695A\u7684\u884C\u52A8\u6E05\u5355\uFF1B\u8BED\u6C14\u66F4\u51B7\u9759\u4E00\u70B9..."
+      }
+    });
+    const actions = dialog.createDiv({ cls: "hermes-inline-custom-actions" });
+    const cancel = actions.createEl("button", { text: "\u53D6\u6D88", attr: { type: "button" } });
+    const submit = actions.createEl("button", {
+      cls: "mod-cta",
+      text: "\u751F\u6210\u9884\u89C8",
+      attr: { type: "button" }
+    });
+    this.panelEl = dialog;
+    this.inputEl = input;
+    closeButton.addEventListener("click", () => this.dismiss(null));
+    cancel.addEventListener("click", () => this.dismiss(null));
+    submit.addEventListener("click", () => this.dismiss(input.value.trim() || null));
+    document.addEventListener("pointerdown", this.outsideClickHandler, true);
+    document.addEventListener("keydown", this.keydownHandler, true);
+    window.setTimeout(() => {
+      input.focus({ preventScroll: true });
+      input.select();
+    }, 0);
+  }
+  dismiss(value) {
+    this.finish(value);
+    this.teardown();
+  }
+  teardown() {
+    document.removeEventListener("pointerdown", this.outsideClickHandler, true);
+    document.removeEventListener("keydown", this.keydownHandler, true);
+    this.panelEl?.remove();
+    this.panelEl = null;
+    this.inputEl = null;
+    this.previouslyFocusedEl?.focus({ preventScroll: true });
+    this.previouslyFocusedEl = null;
+  }
+  finish(value) {
+    if (this.didResolve) {
+      return;
+    }
+    this.didResolve = true;
+    this.resolve(value);
   }
 };
 var InlineProposalWidget = class _InlineProposalWidget extends import_view.WidgetType {
@@ -1073,16 +2209,16 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
       id: "attach-current-selection-to-hermes",
       name: "Attach current selection to Hermes",
       callback: async () => {
-        const selection = this.getCurrentSelectionText();
-        if (!selection) {
-          new import_obsidian2.Notice("No selected text found in the active note.");
-          return;
-        }
         const sidebar = await this.activateView();
-        sidebar.attachContext({
-          label: "Selection",
-          content: selection
-        });
+        sidebar.attachCurrentSelection();
+      }
+    });
+    this.addCommand({
+      id: "attach-current-note-to-hermes",
+      name: "Attach current note to Hermes",
+      callback: async () => {
+        const sidebar = await this.activateView();
+        await sidebar.attachCurrentArticle();
       }
     });
     this.addSettingTab(new HermesSidebarSettingTab(this.app, this));
@@ -1214,11 +2350,69 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
     });
   }
   getLiveContextInfo() {
+    const markdownView = this.getActiveMarkdownView();
     const file = this.getCurrentContextFile();
+    const noteText = markdownView?.getViewData?.() ?? "";
+    const selectionText = this.selectionSnapshot.trim();
     return {
       noteTitle: (file?.basename ?? this.lastActiveNoteTitle) || void 0,
       notePath: (file?.path ?? this.lastActiveNotePath) || void 0,
-      selectionText: this.selectionSnapshot.trim() || void 0
+      selectionText: selectionText || void 0,
+      noteContext: selectionText && noteText ? buildSelectionContextWindow({
+        noteText,
+        selectedText: selectionText,
+        mode: markdownView?.getMode?.() ?? "source",
+        preferredOffset: 0,
+        windowLines: 6,
+        maxCharacters: 1800
+      }) : void 0
+    };
+  }
+  async getCurrentArticleContext() {
+    const file = this.getCurrentContextFile();
+    if (!file) {
+      return null;
+    }
+    const markdownView = this.getActiveMarkdownView();
+    const noteText = markdownView?.file?.path === file.path ? markdownView.getViewData() : await this.app.vault.cachedRead(file);
+    return {
+      label: "\u5F53\u524D\u6587\u7AE0",
+      content: [
+        file.basename ? `Title: ${file.basename}` : "",
+        file.path ? `Path: ${file.path}` : "",
+        "```markdown",
+        noteText || "(\u7A7A\u767D\u6587\u7AE0)",
+        "```"
+      ].filter(Boolean).join("\n")
+    };
+  }
+  getCurrentSelectionContext() {
+    const markdownView = this.getActiveMarkdownView();
+    const selectedText = this.getCurrentSelectionText().trim() || this.selectionSnapshot.trim();
+    if (!selectedText) {
+      return null;
+    }
+    const noteText = markdownView?.getViewData?.() ?? "";
+    const noteContext = noteText ? buildSelectionContextWindow({
+      noteText,
+      selectedText,
+      mode: markdownView?.getMode?.() ?? "source",
+      preferredOffset: 0,
+      windowLines: 6,
+      maxCharacters: 1800
+    }) : "";
+    return {
+      label: "\u9009\u533A",
+      content: [
+        "Selected text:",
+        "```text",
+        selectedText,
+        "```",
+        noteContext ? "Nearby note context:" : "",
+        noteContext ? "```text" : "",
+        noteContext,
+        noteContext ? "```" : ""
+      ].filter(Boolean).join("\n")
     };
   }
   clearSelectionSnapshot(collapseSelection = false) {
@@ -1386,7 +2580,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activeStreamingMessageIndex = null;
     this.streamingRenderToken = 0;
     this.pendingStreamingRenderFrame = null;
-    this.dismissedLiveNoteKey = "";
     this.messageCounter = 0;
     this.queueCounter = 0;
     this.isHistoryOpen = false;
@@ -1396,6 +2589,8 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.suppressNextMessagesScroll = false;
     this.activityEntries = [];
     this.activityCounter = 0;
+    this.expandedActivityMessageIds = /* @__PURE__ */ new Set();
+    this.expandedActivityGroupIds = /* @__PURE__ */ new Set();
     this.plugin = plugin;
   }
   getViewType() {
@@ -1425,6 +2620,8 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       this.pendingScrollRestoreFrame = null;
     }
     this.cancelPendingStreamingRender();
+    this.expandedActivityMessageIds.clear();
+    this.expandedActivityGroupIds.clear();
     this.pendingImages = [];
     this.containerEl.empty();
   }
@@ -1434,6 +2631,9 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       return;
     }
     this.renderLiveContext();
+    if (this.quickActionsEl?.isConnected) {
+      this.renderQuickActions(this.quickActionsEl, () => this.imageFileInputEl?.click());
+    }
   }
   isComposerFocused() {
     return !!this.inputEl && document.activeElement === this.inputEl;
@@ -1442,7 +2642,28 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.pendingContexts.push(context);
     this.statusText = `\u5DF2\u9644\u52A0 ${context.label.toLowerCase()} \u4E0A\u4E0B\u6587`;
     this.render();
-    new import_obsidian2.Notice(`${context.label} attached to Hermes.`);
+    new import_obsidian2.Notice(`\u5DF2\u6DFB\u52A0${context.label}\u3002`);
+  }
+  async attachCurrentArticle() {
+    const context = await this.plugin.getCurrentArticleContext();
+    if (!context) {
+      new import_obsidian2.Notice("\u5F53\u524D\u6CA1\u6709\u53EF\u6DFB\u52A0\u7684\u6587\u7AE0\u3002");
+      return;
+    }
+    this.pendingContexts.push(context);
+    this.statusText = `\u5DF2\u6DFB\u52A0\u6587\u7AE0\uFF1A${this.plugin.getCurrentContextFile()?.basename ?? "\u5F53\u524D\u6587\u7AE0"}`;
+    this.render(false);
+  }
+  attachCurrentSelection() {
+    const context = this.plugin.getCurrentSelectionContext();
+    if (!context) {
+      new import_obsidian2.Notice("\u8BF7\u5148\u5728\u5F53\u524D\u6587\u7AE0\u91CC\u9009\u4E2D\u4E00\u6BB5\u6587\u5B57\u3002");
+      return;
+    }
+    this.pendingContexts.push(context);
+    this.plugin.clearSelectionSnapshot(false);
+    this.statusText = "\u5DF2\u6DFB\u52A0\u9009\u533A";
+    this.render(false);
   }
   focusComposerWithoutScroll() {
     if (!this.inputEl) {
@@ -1467,7 +2688,8 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activityBubbleEl = void 0;
     this.activityTimelineEl = void 0;
     this.liveContextEl = void 0;
-    this.activityEl = void 0;
+    this.quickActionsEl = void 0;
+    this.imageFileInputEl = void 0;
     const previousMessagesScrollTop = this.messagesEl?.scrollTop ?? null;
     const wasAutoSticking = this.shouldAutoStickToBottom;
     this.captureScrollIntent();
@@ -1510,7 +2732,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       this.pendingContexts = [];
       this.queuedTurns = [];
       this.activeStreamingMessageIndex = null;
-      this.dismissedLiveNoteKey = "";
       this.plugin.clearSelectionSnapshot(true);
       this.plugin.createSession();
       this.statusText = "\u5DF2\u5F00\u59CB\u65B0\u5BF9\u8BDD";
@@ -1548,7 +2769,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
         this.pendingContexts = [];
         this.queuedTurns = [];
         this.activeStreamingMessageIndex = null;
-        this.dismissedLiveNoteKey = "";
         this.plugin.setActiveSession(session.id);
         this.statusText = "\u5DF2\u5207\u6362\u5BF9\u8BDD";
         this.render();
@@ -1599,24 +2819,10 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     if (activeSession.messages.length === 0) {
       this.messagesEl.createDiv({
         cls: "hermes-sidebar-empty-state",
-        text: "\u9009\u62E9\u4E00\u6BB5\u6587\u5B57\uFF0C\u6216\u76F4\u63A5\u5411 Hermes \u63D0\u95EE\u3002"
+        text: "\u624B\u52A8\u6DFB\u52A0\u6587\u7AE0\u3001\u9009\u533A\u6216\u56FE\u7247\uFF0C\u518D\u5411 Hermes \u63D0\u95EE\u3002"
       });
     } else {
-      for (const [index, message] of activeSession.messages.entries()) {
-        const rendered = this.renderChatMessage(message);
-        if (index === this.activeStreamingMessageIndex && message.kind === "final" && rendered) {
-          this.streamingMessageRef = message;
-          this.streamingRowEl = rendered.row;
-          this.streamingBubbleEl = rendered.bubble;
-          this.streamingBodyEl = rendered.body;
-        }
-        if (message.id === this.activeActivityMessageId && rendered?.activity) {
-          this.activityMessageRef = message;
-          this.activityRowEl = rendered.row;
-          this.activityBubbleEl = rendered.bubble;
-          this.activityTimelineEl = rendered.activity;
-        }
-      }
+      this.renderSessionMessages(activeSession.messages);
     }
     const restoredScrollTop = getRestoredScrollTop(previousMessagesScrollTop, this.shouldAutoStickToBottom);
     if (restoredScrollTop !== void 0) {
@@ -1637,10 +2843,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       this.scheduleMessagesToBottom();
     }
     const composer = root.createDiv({ cls: "hermes-sidebar-composer" });
-    this.activityEl = composer.createDiv({
-      cls: "hermes-sidebar-activity-slot"
-    });
-    this.renderActivityStatus();
     const preserveFocus = shouldRestoreComposerFocus(
       !allowInputReset && !!this.inputEl && document.activeElement === this.inputEl,
       this.shouldAutoStickToBottom
@@ -1652,7 +2854,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       cls: "hermes-sidebar-input"
     });
     this.inputEl.value = this.draftText;
-    this.inputEl.placeholder = "\u95EE\u95EE Hermes\uFF1A\u53EF\u4EE5\u56F4\u7ED5\u5F53\u524D\u7B14\u8BB0\u3001\u9009\u533A\u6216\u56FE\u7247...";
+    this.inputEl.placeholder = "\u95EE\u95EE Hermes...";
     this.inputEl.addEventListener("input", () => {
       this.draftText = this.inputEl?.value ?? "";
     });
@@ -1661,25 +2863,21 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     });
     this.contextEl = shell.createDiv({ cls: "hermes-sidebar-context" });
     this.renderContextChips();
-    const toolbar = shell.createDiv({ cls: "hermes-sidebar-composer-toolbar" });
-    const controls = toolbar.createDiv({ cls: "hermes-sidebar-controls" });
-    const attachButton = controls.createEl("button", {
-      cls: "hermes-sidebar-attach-button",
-      text: "\u56FE\u7247"
-    });
-    const fileInput = controls.createEl("input", {
+    const fileInput = shell.createEl("input", {
       type: "file",
       cls: "hermes-sidebar-file-input"
     });
+    this.imageFileInputEl = fileInput;
     fileInput.accept = "image/*";
     fileInput.multiple = true;
-    attachButton.addEventListener("click", () => {
-      fileInput.click();
-    });
     fileInput.addEventListener("change", () => {
       void this.handleFileInput(fileInput.files);
       fileInput.value = "";
     });
+    this.quickActionsEl = shell.createDiv({ cls: "hermes-sidebar-quick-actions" });
+    this.renderQuickActions(this.quickActionsEl, () => fileInput.click());
+    const toolbar = shell.createDiv({ cls: "hermes-sidebar-composer-toolbar" });
+    const controls = toolbar.createDiv({ cls: "hermes-sidebar-controls" });
     const modelControl = controls.createDiv({
       cls: "hermes-sidebar-control-group"
     });
@@ -1744,7 +2942,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
         this.stopActiveRun();
         return;
       }
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      if (isComposerSendShortcut(event)) {
         event.preventDefault();
         void this.handleSend();
       }
@@ -1763,90 +2961,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       return;
     }
     this.liveContextEl.empty();
-    const liveContext = this.plugin.getLiveContextInfo();
-    const liveNoteKey = this.getLiveNoteKey(liveContext);
-    const isNoteDismissed = !!liveNoteKey && this.dismissedLiveNoteKey === liveNoteKey;
-    const hasLiveContext = !!(liveContext.noteTitle && !isNoteDismissed || liveContext.selectionText);
-    this.liveContextEl.toggleClass("is-empty", !hasLiveContext);
-    this.liveContextEl.toggleClass("has-selection", !!liveContext.selectionText);
-    if (!hasLiveContext) {
-      return;
-    }
-    if (liveContext.noteTitle && !isNoteDismissed) {
-      const noteChip = this.liveContextEl.createDiv({
-        cls: "hermes-sidebar-chip hermes-sidebar-chip-note"
-      });
-      noteChip.createSpan({
-        cls: "hermes-sidebar-chip-prefix",
-        text: "Reading"
-      });
-      noteChip.createSpan({
-        cls: "hermes-sidebar-chip-value",
-        text: liveContext.noteTitle
-      });
-      const dismissNoteButton = noteChip.createEl("button", {
-        cls: "hermes-sidebar-chip-remove hermes-sidebar-live-note-dismiss",
-        text: "x",
-        attr: {
-          type: "button",
-          "aria-label": "\u672C\u8F6E\u4E0D\u9644\u52A0\u5F53\u524D\u6587\u7AE0"
-        }
-      });
-      dismissNoteButton.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.dismissedLiveNoteKey = liveNoteKey;
-        this.statusText = "\u672C\u8F6E\u5DF2\u53D6\u6D88\u9644\u52A0\u5F53\u524D\u6587\u7AE0";
-        this.renderLiveContext();
-        this.refreshActivityStatus();
-      });
-    }
-    if (!liveContext.selectionText) {
-      return;
-    }
-    const selectionBox = this.liveContextEl.createEl("details", {
-      cls: "hermes-sidebar-selection-preview"
-    });
-    const selectionHeader = selectionBox.createEl("summary", {
-      cls: "hermes-sidebar-selection-header"
-    });
-    const selectionHeaderMain = selectionHeader.createDiv({
-      cls: "hermes-sidebar-selection-summary-main"
-    });
-    selectionHeaderMain.createDiv({
-      cls: "hermes-sidebar-selection-label",
-      text: "Selection"
-    });
-    selectionHeaderMain.createDiv({
-      cls: "hermes-sidebar-selection-text",
-      text: formatSelectionPreview(liveContext.selectionText)
-    });
-    const selectionHeaderSide = selectionHeader.createDiv({
-      cls: "hermes-sidebar-selection-summary-side"
-    });
-    selectionHeaderSide.createDiv({
-      cls: "hermes-sidebar-selection-meta",
-      text: summarizeSelectionLength(liveContext.selectionText)
-    });
-    const clearButton = selectionHeaderSide.createEl("button", {
-      cls: "hermes-sidebar-clear-selection",
-      text: "\u6E05\u9664"
-    });
-    clearButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.plugin.clearSelectionSnapshot(true);
-    });
-    selectionBox.createDiv({
-      cls: "hermes-sidebar-selection-fulltext",
-      text: liveContext.selectionText
-    });
-  }
-  refreshActivityStatus() {
-    if (!this.activityEl) {
-      return;
-    }
-    this.renderActivityStatus();
+    this.liveContextEl.addClass("is-empty");
   }
   renderChatMessage(message, options = {}) {
     if (!this.messagesEl) {
@@ -1861,6 +2976,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
         "hermes-sidebar-chat-row",
         message.kind === "activity" ? "is-activity" : "",
         message.role === "user" ? "is-user" : "is-assistant",
+        message.interim ? "is-interim" : "",
         message.kind,
         hasAttachments ? "has-attachments" : ""
       ].filter(Boolean).join(" ")
@@ -1869,7 +2985,10 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       row.dataset.hermesMessageId = message.id;
     }
     if (message.kind === "activity") {
-      const activity = this.renderMessageActivityTimeline(row, message);
+      const activity = this.renderMessageActivityTimeline(row, message, {
+        forceExpanded: options.forceExpandActivityTimeline,
+        hideSummary: options.hideActivityTimelineSummary
+      });
       return { row, bubble: row, body: row, activity };
     }
     const avatar = row.createDiv({
@@ -1889,6 +3008,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
         "hermes-sidebar-bubble",
         message.kind,
         message.role === "user" ? "is-user" : "is-ai",
+        message.interim ? "is-interim" : "",
         hasAttachments ? "has-attachments" : ""
       ].filter(Boolean).join(" ")
     });
@@ -1901,25 +3021,188 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.renderMessageAttachments(bubble, message);
     return { row, bubble, body };
   }
+  renderSessionMessages(messages) {
+    if (!this.messagesEl) {
+      return;
+    }
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
+      if (message.kind === "activity") {
+        const chain = this.collectActivityMessageChain(messages, index);
+        if (chain.items.length > 0) {
+          const isExpanded = this.expandedActivityGroupIds.has(chain.groupId);
+          const isRunningChain = chain.items.some(
+            (item) => item.message.pending || (item.message.activities ?? []).some((entry) => entry.status === "running")
+          );
+          const tailVisibleCount = getActivityChainTailVisibleCount(chain.items.map((item) => item.message));
+          if (chain.items.length === 1) {
+            const item = chain.items[0];
+            this.renderAndTrackMessage(item.message, item.index);
+            index = chain.endIndex;
+            continue;
+          }
+          const visibility = getVisibleActivityMessages(
+            chain.items.map((item) => item.message),
+            isExpanded,
+            tailVisibleCount,
+            isRunningChain
+          );
+          const hiddenCount = visibility.hiddenCount;
+          if (visibility.totalCount > 0 && (hiddenCount > 0 || isExpanded || !isRunningChain)) {
+            this.renderActivityChainSummary(chain, visibility.totalCount, hiddenCount, isExpanded);
+          }
+          for (const item of chain.items) {
+            if (!visibility.visibleMessages.includes(item.message)) {
+              continue;
+            }
+            this.renderAndTrackMessage(item.message, item.index, {
+              forceExpandActivityTimeline: isExpanded,
+              hideActivityTimelineSummary: isExpanded
+            });
+          }
+        }
+        index = chain.endIndex;
+        continue;
+      }
+      this.renderAndTrackMessage(message, index);
+    }
+  }
+  renderAndTrackMessage(message, index, options = {}) {
+    const rendered = this.renderChatMessage(message, {
+      forceExpandActivityTimeline: options.forceExpandActivityTimeline,
+      hideActivityTimelineSummary: options.hideActivityTimelineSummary
+    });
+    if (index === this.activeStreamingMessageIndex && message.kind === "final" && rendered) {
+      this.streamingMessageRef = message;
+      this.streamingRowEl = rendered.row;
+      this.streamingBubbleEl = rendered.bubble;
+      this.streamingBodyEl = rendered.body;
+    }
+    if (message.id === this.activeActivityMessageId && rendered?.activity) {
+      this.activityMessageRef = message;
+      this.activityRowEl = rendered.row;
+      this.activityBubbleEl = rendered.bubble;
+      this.activityTimelineEl = rendered.activity;
+    }
+  }
+  collectActivityMessageChain(messages, startIndex) {
+    const items = [];
+    let endIndex = startIndex;
+    for (let index = startIndex; index < messages.length; index += 1) {
+      const candidate = messages[index];
+      if (candidate.kind !== "activity") {
+        break;
+      }
+      endIndex = index;
+      if (!this.hasVisibleActivities(candidate)) {
+        continue;
+      }
+      items.push({ message: candidate, index });
+    }
+    const groupId = items[0]?.message.id ?? `activity-group-${startIndex}`;
+    return { groupId, items, endIndex };
+  }
+  renderActivityChainSummary(chain, totalCount, hiddenCount, isExpanded) {
+    if (!this.messagesEl) {
+      return;
+    }
+    const row = this.messagesEl.createDiv({
+      cls: "hermes-sidebar-chat-row hermes-sidebar-activity-group-row"
+    });
+    const summary = row.createDiv({
+      cls: "hermes-sidebar-run-trace-summary hermes-sidebar-activity-group-summary"
+    });
+    summary.createDiv({
+      cls: "hermes-sidebar-run-trace-summary-text",
+      text: formatActivityTimelineSummary(totalCount, hiddenCount)
+    });
+    const toggle = summary.createEl("button", {
+      cls: "hermes-sidebar-run-trace-toggle",
+      attr: {
+        type: "button",
+        title: isExpanded ? "\u6536\u8D77\u8FD9\u6BB5\u8FC7\u7A0B\u94FE" : "\u5C55\u5F00\u8FD9\u6BB5\u8FC7\u7A0B\u94FE",
+        "aria-label": isExpanded ? "\u6536\u8D77\u8FD9\u6BB5\u8FC7\u7A0B\u94FE" : "\u5C55\u5F00\u8FD9\u6BB5\u8FC7\u7A0B\u94FE"
+      }
+    });
+    (0, import_obsidian2.setIcon)(toggle, "chevron-right");
+    toggle.toggleClass("is-expanded", isExpanded);
+    toggle.addEventListener("mousedown", (event) => event.preventDefault());
+    toggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.setActivityGroupExpanded(chain.groupId, !isExpanded);
+      this.render(false);
+      this.scheduleMessagesToBottom();
+    });
+  }
+  setActivityGroupExpanded(groupId, expanded) {
+    if (!groupId) {
+      return;
+    }
+    if (expanded) {
+      this.expandedActivityGroupIds.add(groupId);
+      return;
+    }
+    this.expandedActivityGroupIds.delete(groupId);
+  }
   hasVisibleActivities(message) {
     return (message.activities ?? []).some(
       (entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
     );
   }
-  renderMessageActivityTimeline(container, message) {
+  renderMessageActivityTimeline(container, message, options = {}) {
     const activities = (message.activities ?? []).filter(
       (entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
     );
     if (activities.length === 0 || message.role !== "assistant") {
       return void 0;
     }
+    const messageId = message.id;
+    const isExpanded = options.forceExpanded || Boolean(messageId && this.expandedActivityMessageIds.has(messageId));
     const isRunning = message.pending || activities.some((entry) => entry.status === "running");
+    const latestActivity = activities.length > 0 ? activities[activities.length - 1] : void 0;
+    const tailVisibleCount = activities.length > 1 && latestActivity?.toolName === "thinking" ? 2 : 1;
+    const visibility = getVisibleActivityTimelineEntries(activities, isExpanded, tailVisibleCount, isRunning);
     const trace = container.createDiv({
       cls: "hermes-sidebar-run-trace"
     });
     trace.toggleClass("is-running", isRunning);
+    trace.toggleClass("is-expanded", isExpanded);
+    trace.toggleClass("is-collapsed", !isExpanded);
+    const shouldRenderSummary = !options.hideSummary && visibility.totalCount > 0 && (visibility.hiddenCount > 0 || isExpanded || !isRunning);
+    if (shouldRenderSummary) {
+      const summary = trace.createDiv({ cls: "hermes-sidebar-run-trace-summary" });
+      summary.createDiv({
+        cls: "hermes-sidebar-run-trace-summary-text",
+        text: formatActivityTimelineSummary(visibility.totalCount, visibility.hiddenCount)
+      });
+      const toggle = summary.createEl("button", {
+        cls: "hermes-sidebar-run-trace-toggle",
+        attr: {
+          type: "button",
+          title: isExpanded ? "\u6536\u8D77\u8FD9\u6761\u8FC7\u7A0B\u94FE" : "\u5C55\u5F00\u8FD9\u6761\u8FC7\u7A0B\u94FE",
+          "aria-label": isExpanded ? "\u6536\u8D77\u8FD9\u6761\u8FC7\u7A0B\u94FE" : "\u5C55\u5F00\u8FD9\u6761\u8FC7\u7A0B\u94FE"
+        }
+      });
+      (0, import_obsidian2.setIcon)(toggle, "chevron-right");
+      toggle.toggleClass("is-expanded", isExpanded);
+      toggle.addEventListener("mousedown", (event) => event.preventDefault());
+      toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!messageId) {
+          return;
+        }
+        this.setActivityTimelineExpanded(messageId, !isExpanded);
+        this.refreshActivityMessage(message);
+        this.scheduleMessagesToBottom();
+      });
+    }
+    if (visibility.visibleEntries.length === 0) {
+      return trace;
+    }
     const list = trace.createDiv({ cls: "hermes-sidebar-run-steps" });
-    for (const [index, entry] of activities.entries()) {
+    for (const [index, entry] of visibility.visibleEntries.entries()) {
       const item = list.createDiv({
         cls: `hermes-sidebar-run-step is-${entry.status}`
       });
@@ -2047,40 +3330,35 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       preview.addEventListener("click", () => new HermesImagePreviewModal(this.app, image).open());
     }
   }
-  renderActivityStatus() {
-    if (!this.activityEl) {
-      return;
-    }
-    this.activityEl.empty();
-    const statusText = this.buildStatusText();
-    if (!statusText && this.activityEntries.length === 0) {
-      return;
-    }
-    const panel = this.activityEl.createDiv({ cls: "hermes-sidebar-activity" });
-    const header = panel.createDiv({ cls: "hermes-sidebar-activity-header" });
-    header.createDiv({
-      cls: "hermes-sidebar-activity-status",
-      text: statusText || "\u6D3B\u52A8\u8BB0\u5F55"
-    });
-    const toggle = header.createEl("button", {
-      cls: "hermes-sidebar-activity-toggle",
-      text: "\u8FC7\u7A0B",
-      attr: { type: "button" }
-    });
-    toggle.disabled = this.activityEntries.length === 0;
-    toggle.addEventListener("click", () => {
-      this.revealInlineActivityTimeline();
-    });
-  }
   revealInlineActivityTimeline() {
-    if (!this.activityTimelineEl?.isConnected) {
-      const target = this.getActiveActivityMessage();
-      if (target) {
-        this.ensureActivityMessageElements(target);
-      }
+    const target = this.getActiveActivityMessage();
+    if (!target?.id) {
+      return;
     }
-    if (this.activityTimelineEl instanceof HTMLDetailsElement) {
-      this.activityTimelineEl.open = true;
+    const groupId = this.getActivityGroupIdForMessage(target);
+    if (groupId && !this.expandedActivityGroupIds.has(groupId)) {
+      this.setActivityGroupExpanded(groupId, true);
+    }
+    const activities = (target.activities ?? []).filter(
+      (entry) => isHermesActivityEntry(entry) && shouldShowActivityEntry(entry.toolName)
+    );
+    const isExpanded = this.expandedActivityMessageIds.has(target.id);
+    const isRunning = target.pending || activities.some((entry) => entry.status === "running");
+    const visibility = getVisibleActivityTimelineEntries(activities, isExpanded, 1, isRunning);
+    if (!isExpanded && visibility.hiddenCount > 0) {
+      this.setActivityTimelineExpanded(target.id, true);
+      this.render(false);
+      this.scheduleMessagesToBottom();
+      return;
+    }
+    if (!isExpanded) {
+      this.setActivityTimelineExpanded(target.id, true);
+      this.refreshActivityMessage(target);
+      this.scheduleMessagesToBottom();
+      return;
+    }
+    if (!this.activityTimelineEl?.isConnected) {
+      this.render(false);
     }
     this.scheduleMessagesToBottom();
   }
@@ -2088,14 +3366,38 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     const target = this.getActiveActivityMessage();
     if (target?.role === "assistant" && target.kind === "activity") {
       this.settleActivityMessage(target);
-      const timeline = this.ensureActivityMessageElements(target);
-      const bubble = this.activityBubbleEl;
-      if (timeline && bubble) {
-        timeline.remove();
-        this.activityTimelineEl = this.renderMessageActivityTimeline(bubble, target);
-      }
+      this.refreshActivityMessage(target);
       this.persistActiveSession(false);
     }
+    this.refreshLastAssistantHistoryContent();
+  }
+  setActivityTimelineExpanded(messageId, expanded) {
+    if (!messageId) {
+      return;
+    }
+    if (expanded) {
+      this.expandedActivityMessageIds.add(messageId);
+      return;
+    }
+    this.expandedActivityMessageIds.delete(messageId);
+  }
+  getActivityGroupIdForMessage(target) {
+    const messages = this.plugin.getActiveSession().messages;
+    const targetIndex = messages.findIndex((message) => message.id === target.id);
+    if (targetIndex < 0) {
+      return void 0;
+    }
+    let groupStartIndex = targetIndex;
+    for (let index = targetIndex; index >= 0; index -= 1) {
+      const candidate = messages[index];
+      if (candidate.kind !== "activity") {
+        break;
+      }
+      if (this.hasVisibleActivities(candidate)) {
+        groupStartIndex = index;
+      }
+    }
+    return messages[groupStartIndex]?.id ?? target.id;
   }
   async renderMarkdownInto(container, content) {
     container.empty();
@@ -2137,19 +3439,30 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.contextEl.classList.remove("is-empty");
     for (const [index, context] of this.pendingContexts.entries()) {
       const chip = this.contextEl.createDiv({ cls: "hermes-sidebar-chip" });
-      chip.setText(context.label);
+      chip.createSpan({
+        cls: "hermes-sidebar-chip-prefix",
+        text: "\u5DF2\u6DFB\u52A0"
+      });
+      chip.createSpan({
+        cls: "hermes-sidebar-chip-value",
+        text: context.label
+      });
       const remove = chip.createEl("button", {
         cls: "hermes-sidebar-chip-remove",
         text: "x"
       });
       remove.addEventListener("click", () => {
         this.pendingContexts.splice(index, 1);
-        this.renderContextChips();
+        this.render(false);
       });
     }
     for (const image of this.pendingImages) {
       const chip = this.contextEl.createDiv({
         cls: "hermes-sidebar-image-chip"
+      });
+      chip.createSpan({
+        cls: "hermes-sidebar-chip-prefix",
+        text: "\u56FE\u7247"
       });
       const thumb = chip.createEl("img", { cls: "hermes-sidebar-image-thumb" });
       thumb.src = image.previewDataUrl;
@@ -2167,6 +3480,69 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       });
     }
   }
+  renderQuickActions(container, openImagePicker) {
+    container.empty();
+    const liveContext = this.plugin.getLiveContextInfo();
+    const selectedText = liveContext.selectionText ?? "";
+    const hasSelection = !!selectedText;
+    const title = container.createDiv({
+      cls: "hermes-sidebar-quick-actions-title",
+      text: hasSelection ? `\u9009\u533A\u5DF2\u5C31\u7EEA \xB7 ${summarizeSelectionLength(selectedText)}` : "\u5FEB\u6377\u64CD\u4F5C"
+    });
+    const actions = container.createDiv({ cls: "hermes-sidebar-quick-actions-list" });
+    const addAction = (label, icon, onClick, options = {}) => {
+      const button = actions.createEl("button", {
+        cls: "hermes-sidebar-quick-action",
+        attr: {
+          type: "button",
+          title: options.title ?? label,
+          "aria-label": label
+        }
+      });
+      button.disabled = !!options.disabled;
+      button.toggleClass("is-active", !!options.active);
+      const iconEl = button.createSpan({ cls: "hermes-sidebar-quick-action-icon" });
+      (0, import_obsidian2.setIcon)(iconEl, icon);
+      button.createSpan({
+        cls: "hermes-sidebar-quick-action-label",
+        text: label
+      });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (button.disabled) {
+          return;
+        }
+        onClick();
+      });
+      return button;
+    };
+    const currentFile = this.plugin.getCurrentContextFile();
+    const articleLabel = currentFile?.basename ? `\u6DFB\u52A0\u6587\u7AE0\uFF1A${currentFile.basename}` : "\u6DFB\u52A0\u5F53\u524D\u6587\u7AE0";
+    addAction("\u6587\u7AE0", "file-text", () => void this.attachCurrentArticle(), {
+      disabled: !currentFile,
+      title: articleLabel
+    });
+    addAction("\u9009\u533A", "text-select", () => this.attachCurrentSelection(), {
+      disabled: !hasSelection,
+      title: hasSelection ? `\u53D1\u9001\u65F6\u81EA\u52A8\u9644\u52A0\uFF1A${formatSelectionPreview(selectedText, 64)}` : "\u9009\u4E2D\u6B63\u6587\u540E\u81EA\u52A8\u9644\u52A0\u9009\u533A",
+      active: hasSelection
+    });
+    addAction("\u56FE\u7247", "image-plus", openImagePicker, {
+      title: "\u6DFB\u52A0\u56FE\u7247"
+    });
+    addAction(
+      "\u6E05\u7A7A",
+      "eraser",
+      () => {
+        this.clearPendingAttachments();
+      },
+      {
+        disabled: this.pendingContexts.length === 0 && this.pendingImages.length === 0,
+        title: "\u6E05\u7A7A\u5DF2\u6DFB\u52A0\u5185\u5BB9"
+      }
+    );
+    title.toggleClass("is-muted", !hasSelection && this.pendingContexts.length === 0 && this.pendingImages.length === 0);
+  }
   removePendingImage(imageId) {
     const index = this.pendingImages.findIndex((image) => image.id === imageId);
     if (index === -1) {
@@ -2174,7 +3550,16 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     }
     const [removed] = this.pendingImages.splice(index, 1);
     cleanupAttachmentFile(removed.path);
-    this.renderContextChips();
+    this.render(false);
+  }
+  clearPendingAttachments() {
+    for (const image of this.pendingImages) {
+      cleanupAttachmentFile(image.path);
+    }
+    this.pendingContexts = [];
+    this.pendingImages = [];
+    this.statusText = "\u5DF2\u6E05\u7A7A\u624B\u52A8\u6DFB\u52A0\u5185\u5BB9";
+    this.render(false);
   }
   applyModelSelection(value) {
     const selected = HERMES_MODEL_OPTIONS.find((item) => item.value === value);
@@ -2196,17 +3581,15 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       this.applyReasoningSelection(this.reasoningSelectEl.value);
     }
   }
-  getLiveNoteKey(liveContext = this.plugin.getLiveContextInfo()) {
-    return (liveContext.notePath || liveContext.noteTitle || "").trim();
-  }
   getActiveTurnLiveContext() {
-    const liveContext = { ...this.plugin.getLiveContextInfo() };
-    const liveNoteKey = this.getLiveNoteKey(liveContext);
-    if (liveNoteKey && this.dismissedLiveNoteKey === liveNoteKey) {
-      delete liveContext.noteTitle;
-      delete liveContext.notePath;
+    const liveContext = this.plugin.getLiveContextInfo();
+    if (!liveContext.selectionText) {
+      return {};
     }
-    return liveContext;
+    return {
+      selectionText: liveContext.selectionText,
+      noteContext: liveContext.noteContext
+    };
   }
   nextMessageId(prefix) {
     return `${prefix}-${Date.now()}-${++this.messageCounter}`;
@@ -2214,7 +3597,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
   getConversationHistory() {
     return this.plugin.getActiveSession().messages.filter((message) => !message.interim && message.kind !== "progress" && message.kind !== "activity").map((message) => ({
       role: message.role,
-      content: message.content
+      content: message.historyContent?.trim() || message.content
     }));
   }
   appendInterimAssistantMessage(content) {
@@ -2223,6 +3606,11 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       return;
     }
     const session = this.plugin.getActiveSession();
+    const insertIndex = getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
+    const previousMessage = insertIndex > 0 ? session.messages[insertIndex - 1] : void 0;
+    if (previousMessage?.role === "assistant" && previousMessage.kind === "final" && previousMessage.interim && previousMessage.content.trim() === text) {
+      return;
+    }
     this.appendTurnMessage(session, {
       id: this.nextMessageId("assistant"),
       role: "assistant",
@@ -2258,7 +3646,8 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activityBubbleEl = void 0;
     this.activityTimelineEl = void 0;
     this.persistActiveSession(false);
-    this.ensureActivityMessageElements(target);
+    this.render(false);
+    this.scheduleMessagesToBottom();
     return target;
   }
   ensureActivityMessageElements(target) {
@@ -2332,6 +3721,12 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     }
     const preview = event.preview?.trim() || void 0;
     const status = event.status ?? (event.isError ? "error" : "info");
+    if (toolName === "thinking") {
+      const latestThinking = [...this.activityEntries].reverse().find((entry2) => entry2.toolName === "thinking");
+      if (latestThinking?.status === status && latestThinking.preview === preview) {
+        return;
+      }
+    }
     if (toolName && toolName !== "thinking" && status === "running") {
       this.settleCurrentActivityIf((entry2) => entry2.toolName === "thinking" && entry2.status === "running");
     }
@@ -2415,50 +3810,13 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.refreshActivityMessage(target);
   }
   refreshActivityMessage(target) {
-    const timeline = this.ensureActivityMessageElements(target);
-    const bubble = this.activityBubbleEl;
-    if (!timeline || !bubble) {
-      this.render(false);
-      return;
-    }
-    timeline.remove();
-    const nextTimeline = this.renderMessageActivityTimeline(bubble, target);
-    this.activityTimelineEl = nextTimeline;
+    this.activityMessageRef = void 0;
+    this.activityRowEl = void 0;
+    this.activityBubbleEl = void 0;
+    this.activityTimelineEl = void 0;
+    this.render(false);
     this.persistActiveSession(false);
     this.scheduleMessagesToBottom();
-  }
-  pushLocalActivity(input) {
-    const text = input.text.trim();
-    if (!text) {
-      return;
-    }
-    const existingRunningIndex = input.toolName ? this.activityEntries.findIndex(
-      (entry2) => entry2.toolName === input.toolName && shouldMergeActivityEntry(input.toolName, entry2.status, input.status ?? "info", entry2.preview, input.preview)
-    ) : -1;
-    const entry = {
-      id: `activity-${Date.now()}-${++this.activityCounter}`,
-      text,
-      toolName: input.toolName,
-      preview: input.preview?.trim() || void 0,
-      status: input.status ?? "info",
-      createdAt: Date.now()
-    };
-    if (existingRunningIndex >= 0) {
-      const updatedEntry = {
-        ...this.activityEntries[existingRunningIndex],
-        text,
-        status: entry.status,
-        preview: entry.preview,
-        createdAt: entry.createdAt
-      };
-      this.activityEntries[existingRunningIndex] = updatedEntry;
-      this.updateActivityMessageByEntryId(updatedEntry.id, updatedEntry);
-    } else {
-      this.activityEntries.push(entry);
-      this.ensureActivityMessage(entry);
-    }
-    this.activityEntries = this.activityEntries.slice(-20);
-    this.statusText = text;
   }
   setFallbackStatus(text) {
     if (!this.statusText || !this.activityEntries.length) {
@@ -2526,11 +3884,16 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
   finalizeActiveStream(finalText) {
     const session = this.plugin.getActiveSession();
     if (this.activeStreamingMessageIndex === null) {
+      const content = finalText?.trim() || "(Hermes returned an empty response.)";
       const message = {
         id: this.nextMessageId("assistant"),
         role: "assistant",
         kind: "final",
-        content: finalText?.trim() || "(Hermes returned an empty response.)",
+        content,
+        historyContent: buildReplayAssistantContent({
+          finalText: content,
+          activities: this.activityEntries
+        }),
         pending: false
       };
       this.activeStreamingMessageIndex = this.appendTurnMessage(session, message);
@@ -2551,6 +3914,10 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     } else if (!target.content.trim()) {
       target.content = "(Hermes returned an empty response.)";
     }
+    target.historyContent = buildReplayAssistantContent({
+      finalText: target.content,
+      activities: this.activityEntries
+    });
     target.pending = false;
     this.cancelPendingStreamingRender();
     if (this.streamingBodyEl?.isConnected) {
@@ -2560,6 +3927,20 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       this.refreshActivityMessage(target);
     }
     this.persistActiveSession(false);
+  }
+  refreshLastAssistantHistoryContent() {
+    const session = this.plugin.getActiveSession();
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const message = session.messages[index];
+      if (message.role !== "assistant" || message.kind !== "final" || message.interim) {
+        continue;
+      }
+      message.historyContent = buildReplayAssistantContent({
+        finalText: message.content,
+        activities: this.activityEntries
+      });
+      return;
+    }
   }
   async handlePasteImages(event) {
     const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -2612,7 +3993,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     if (turn.liveContext.selectionText) {
       this.plugin.clearSelectionSnapshot(false);
     }
-    this.dismissedLiveNoteKey = "";
     this.statusText = this.isSending ? `\u5DF2\u52A0\u5165\u961F\u5217\uFF08\u8FD8\u6709 ${this.queuedTurns.length} \u6761\u5F85\u5904\u7406\uFF09` : "Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F";
     this.render(false);
     this.focusComposerWithoutScroll();
@@ -2649,7 +4029,13 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       id: this.nextMessageId("user"),
       role: "user",
       kind: "user",
-      content: turn.userText
+      content: turn.userText,
+      historyContent: buildReplayUserContent({
+        userText: turn.userText,
+        contexts: turn.contexts,
+        liveContext: turn.liveContext,
+        imageNames: turn.images.map((image) => image.name)
+      })
     };
     if (imageAttachments.length > 0) {
       userMessage.attachments = imageAttachments;
@@ -2663,6 +4049,8 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activeStreamingMessageIndex = null;
     this.activityMessageRef = void 0;
     this.activeActivityMessageId = void 0;
+    this.expandedActivityMessageIds.clear();
+    this.expandedActivityGroupIds.clear();
     this.isSending = true;
     this.activityEntries = [];
     this.statusText = "";
@@ -2694,7 +4082,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
               if (this.activityEntries.length === 0 || isDetailedStatusText(event.text || "")) {
                 this.statusText = event.text || this.statusText;
               }
-              this.refreshActivityStatus();
               return;
             }
             if (event.type === "activity") {
@@ -2703,29 +4090,24 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
               if (activityText && event.eventType !== "run.config") {
                 this.statusText = activityText;
               }
-              this.refreshActivityStatus();
               return;
             }
             if (event.type === "progress") {
               if (event.text) {
                 this.appendInterimAssistantMessage(event.text);
                 this.statusText = `\u6B63\u5728\u5904\u7406\uFF1A${formatSelectionPreview(event.text, 72)}`;
-                this.refreshActivityStatus();
               }
               return;
             }
             const target = this.ensureStreamingFinalMessage();
             target.content += event.text || "";
             target.pending = true;
-            this.statusText = `\u6B63\u5728\u5199\u56DE\u590D\uFF1A\u5DF2\u8F93\u51FA ${target.content.length} chars`;
             this.queueStreamingMessageRender(target);
-            this.refreshActivityStatus();
             return;
           }
           if (event.type === "segment_break") {
             this.convertActiveStreamToProgress();
             this.setFallbackStatus("Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406");
-            this.refreshActivityStatus();
             this.scrollMessagesToBottom();
             return;
           }
@@ -2738,7 +4120,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
             this.activeStreamingMessageIndex = null;
             hasFinalized = true;
             this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
-            this.refreshActivityStatus();
             this.scheduleMessagesToBottom();
           }
         }
@@ -2756,7 +4137,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       }
       this.persistActiveSession();
       this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
-      this.refreshActivityStatus();
     } catch (error) {
       if (isHermesAbortError(error)) {
         this.convertActiveStreamToProgress();
@@ -2782,7 +4162,6 @@ ${message}`
         this.statusText = "Hermes call failed";
         new import_obsidian2.Notice("Hermes request failed. Check the sidebar for details.");
       }
-      this.refreshActivityStatus();
     } finally {
       this.activeTurnUserMessageId = void 0;
       this.activeActivityMessageId = void 0;
@@ -2792,7 +4171,6 @@ ${message}`
       this.activeRunCancel = void 0;
       this.isSending = false;
       this.settleInlineActivityTimeline();
-      this.refreshActivityStatus();
       this.scheduleMessagesToBottom();
     }
   }
@@ -2802,7 +4180,6 @@ ${message}`
     }
     this.statusText = "\u6B63\u5728\u505C\u6B62\u5F53\u524D\u4EFB\u52A1";
     this.activeRunCancel();
-    this.refreshActivityStatus();
   }
   persistActiveSession(touch = true) {
     const session = this.plugin.getActiveSession();
@@ -2819,21 +4196,6 @@ ${message}`
   }
   composePrompt(userText, contexts, liveContext) {
     return composeObsidianPrompt({ userText, contexts, liveContext });
-  }
-  buildStatusText() {
-    const parts = [];
-    const visibleActivity = this.getLatestVisibleActivityText();
-    const primaryStatus = visibleActivity || this.statusText;
-    if (!shouldHideStatusText(primaryStatus)) {
-      parts.push(primaryStatus);
-    }
-    if (this.queuedTurns.length > 0) {
-      parts.push(`\u961F\u5217 ${this.queuedTurns.length}`);
-    }
-    if (this.isSending) {
-      parts.push("Esc \u505C\u6B62");
-    }
-    return parts.join(" \xB7 ");
   }
   getModelLabel(value) {
     return HERMES_MODEL_OPTIONS.find((option) => option.value === value)?.label ?? value;
@@ -3136,18 +4498,7 @@ function runInlineHermesBridge(plugin, input) {
 }
 function buildHermesSystemPrompt(basePrompt, runtime) {
   const trimmed = basePrompt.trim();
-  const runtimeProvider = runtime?.provider?.trim() || "unknown";
-  const runtimeModel = runtime?.model?.trim() || "unknown";
-  const runtimeReasoning = runtime?.reasoningEffort?.trim() || "default";
-  const progressInstruction = [
-    `Current runtime: provider=${runtimeProvider}, model=${runtimeModel}, reasoning_effort=${runtimeReasoning}.`,
-    "If the user asks what reasoning strength is active, answer from this Current runtime line instead of guessing from your hidden internals.",
-    "While working, you may send brief interim assistant messages to the user in natural Chinese.",
-    "Use those interim messages like real progress updates someone would actually say in chat.",
-    "Keep them short and warm.",
-    "Do not reveal chain-of-thought, raw tool logs, internal trace text, or hidden reasoning.",
-    "Keep the final answer separate from any interim progress updates."
-  ].join(" ");
+  const progressInstruction = buildHermesInterimGuidance(runtime);
   return trimmed ? `${trimmed}
 
 ${progressInstruction}` : progressInstruction;
@@ -3257,6 +4608,9 @@ function isHermesMessage(value) {
   if ("attachments" in value && value.attachments !== void 0 && !Array.isArray(value.attachments)) {
     return false;
   }
+  if ("historyContent" in value && value.historyContent !== void 0 && typeof value.historyContent !== "string") {
+    return false;
+  }
   if ("activities" in value && value.activities !== void 0 && !Array.isArray(value.activities)) {
     return false;
   }
@@ -3347,8 +4701,7 @@ function isDetailedStatusText(text) {
     "\u6B63\u5728\u601D\u8003\u4E2D",
     "\u6B63\u5728\u8C03\u7528\u5DE5\u5177\u4E2D",
     "Hermes \u6B63\u5728\u5904\u7406",
-    "Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406",
-    "Hermes \u6B63\u5728\u5199\u56DE\u590D"
+    "Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406"
   ])).has(value);
 }
 function formatToolDisplayName(toolName) {

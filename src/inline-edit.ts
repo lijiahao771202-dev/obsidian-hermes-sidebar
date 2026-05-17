@@ -30,10 +30,16 @@ import {
 	buildInlineEditPrompt,
 	comparePositions,
 	filterInlineEditActions,
+	findInlineEditSourceRange,
+	getInlineEditDraftOriginalText,
+	getInlineEditToolbarActions,
 	getInlineEditAction,
 	getParagraphRangeAtCursor,
 	isContinuousSelection,
 	parseSlashTrigger,
+	resolveSelectionSourceRange,
+	buildSelectionContextWindow,
+	selectVaultNoteTitlesForWikiPrompt,
 	transitionInlineDraft
 } from "./inline-edit-helpers";
 
@@ -64,15 +70,18 @@ export interface InlineEditManagerOptions {
 }
 
 interface InlineEditSelectionContext {
-	view: EditorView;
 	editor: Editor;
 	markdownView: MarkdownView;
 	file: TFile;
+	mode: "source" | "preview";
+	rect: { left: number; top: number; right: number; bottom: number };
 	from: EditorPosition;
 	to: EditorPosition;
 	fromOffset: number;
 	toOffset: number;
 	text: string;
+	noteText: string;
+	noteContext: string;
 }
 
 interface InlineEditRequestContext {
@@ -86,8 +95,11 @@ interface InlineEditRequestContext {
 	toOffset: number;
 	targetText: string;
 	noteText: string;
+	noteContext: string;
 	noteTitle: string;
 	mode: InlineEditActionMode;
+	sourceText?: string;
+	customInstruction?: string;
 	followUp?: string;
 	currentProposal?: string;
 }
@@ -172,7 +184,10 @@ export class InlineEditManager {
 		options.plugin.registerEditorSuggest(this.slashSuggest);
 		options.plugin.registerEditorExtension(createInlineEditExtension());
 		options.plugin.registerDomEvent(document, "selectionchange", () => this.scheduleSelectionToolbar());
+		options.plugin.registerDomEvent(document, "keyup", () => this.scheduleSelectionToolbar());
 		options.plugin.registerDomEvent(document, "pointerup", () => this.scheduleSelectionToolbar());
+		options.plugin.registerDomEvent(window, "scroll", () => this.scheduleSelectionToolbar(), true);
+		options.plugin.registerDomEvent(window, "resize", () => this.scheduleSelectionToolbar());
 		options.plugin.registerDomEvent(document, "keydown", (event) => {
 			if (event.key === "Escape") {
 				this.cancelDraft();
@@ -200,6 +215,7 @@ export class InlineEditManager {
 				if (!(info instanceof MarkdownView)) {
 					this.hideSelectionToolbar();
 				}
+				this.scheduleSelectionToolbar();
 			})
 		);
 	}
@@ -237,6 +253,13 @@ export class InlineEditManager {
 		}
 		this.hideSelectionToolbar();
 		const requestContext = this.buildRequestContextFromSelection(action, selectionContext);
+		if (action.id === "custom") {
+			const customInstruction = await this.promptForCustomInstruction();
+			if (!customInstruction) {
+				return;
+			}
+			requestContext.customInstruction = customInstruction;
+		}
 		await this.startRequest(requestContext);
 	}
 
@@ -263,7 +286,7 @@ export class InlineEditManager {
 
 		if (!this.selectionToolbarEl) {
 			this.selectionToolbarEl = document.body.createDiv({ cls: "hermes-inline-toolbar" });
-			for (const action of INLINE_EDIT_ACTIONS) {
+			for (const action of getInlineEditToolbarActions(INLINE_EDIT_ACTIONS)) {
 				const button = this.selectionToolbarEl.createEl("button", {
 					cls: "hermes-inline-toolbar-button",
 					text: action.shortLabel,
@@ -274,12 +297,14 @@ export class InlineEditManager {
 			}
 		}
 
-		const rect = context.view.coordsAtPos(context.toOffset, 1) ?? context.view.coordsAtPos(context.fromOffset, -1);
+		const rect = context.rect;
 		if (!rect) {
 			this.hideSelectionToolbar();
 			return;
 		}
-		this.selectionToolbarEl.style.left = `${Math.max(12, rect.left - 48)}px`;
+		const toolbarWidth = this.selectionToolbarEl.offsetWidth || 420;
+		const left = Math.min(window.innerWidth - toolbarWidth - 12, Math.max(12, rect.left - 48));
+		this.selectionToolbarEl.style.left = `${Math.max(12, left)}px`;
 		this.selectionToolbarEl.style.top = `${Math.max(12, rect.top - 52)}px`;
 		this.selectionToolbarEl.addClass("is-visible");
 	}
@@ -291,43 +316,168 @@ export class InlineEditManager {
 
 	private getSelectionContext(): InlineEditSelectionContext | null {
 		const markdownView = this.options.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!markdownView || markdownView.getMode() !== "source" || !markdownView.file) {
+		if (!markdownView || !markdownView.file) {
 			return null;
 		}
+		const mode = markdownView.getMode() === "preview" ? "preview" : "source";
 		const editor = markdownView.editor;
-		const selections = editor.listSelections();
-		if (selections.length !== 1) {
+		const noteText = markdownView.getViewData?.() ?? editor.getValue();
+
+		if (mode === "source") {
+			const selections = editor.listSelections();
+			if (selections.length === 1 && isContinuousSelection(selections)) {
+				const selection = selections[0];
+				const [from, to] =
+					comparePositions(selection.anchor, selection.head) <= 0
+						? [selection.anchor, selection.head]
+						: [selection.head, selection.anchor];
+				const text = editor.getRange(from, to);
+				if (!text.trim()) {
+					return null;
+				}
+				const view = this.findEditorView(markdownView);
+				const fromOffset = editor.posToOffset(from);
+				const toOffset = editor.posToOffset(to);
+				const rect = view?.coordsAtPos(toOffset, 1) ?? view?.coordsAtPos(fromOffset, -1);
+				if (!rect || !view) {
+					return null;
+				}
+				const noteContext = buildSelectionContextWindow({
+					noteText,
+					fromOffset,
+					toOffset,
+					selectedText: text,
+					mode,
+					windowLines: 6,
+					maxCharacters: 1800
+				});
+				return {
+					editor,
+					markdownView,
+					file: markdownView.file,
+					mode,
+					rect: {
+						left: rect.left,
+						top: rect.top,
+						right: rect.right,
+						bottom: rect.bottom
+					},
+					from,
+					to,
+					fromOffset,
+					toOffset,
+					text,
+					noteText,
+					noteContext
+				};
+			}
+
 			if (selections.length > 1) {
 				this.noticeMultipleSelections();
+				return null;
 			}
+
+			const domSelection = window.getSelection();
+			if (domSelection && !domSelection.isCollapsed && domSelection.rangeCount === 1) {
+				const view = this.findEditorView(markdownView);
+				if (!view || !this.selectionBelongsToContainer(domSelection, view.dom)) {
+					return null;
+				}
+				const selectedText = domSelection.toString().trim();
+				if (!selectedText) {
+					return null;
+				}
+				const cursorOffset = editor.posToOffset(editor.getCursor());
+				const sourceRange = findInlineEditSourceRange(noteText, selectedText, cursorOffset);
+				if (!sourceRange) {
+					return null;
+				}
+				const from = editor.offsetToPos(sourceRange.fromOffset);
+				const to = editor.offsetToPos(sourceRange.toOffset);
+				const rect = domSelection.getRangeAt(0).getBoundingClientRect();
+				const noteContext = buildSelectionContextWindow({
+					noteText,
+					fromOffset: sourceRange.fromOffset,
+					toOffset: sourceRange.toOffset,
+					selectedText: sourceRange.targetText,
+					mode,
+					windowLines: 6,
+					maxCharacters: 1800
+				});
+				return {
+					editor,
+					markdownView,
+					file: markdownView.file,
+					mode,
+					rect: {
+						left: rect.left,
+						top: rect.top,
+						right: rect.right,
+						bottom: rect.bottom
+					},
+					from,
+					to,
+					fromOffset: sourceRange.fromOffset,
+					toOffset: sourceRange.toOffset,
+					text: sourceRange.targetText,
+					noteText,
+					noteContext
+				};
+			}
+
 			return null;
 		}
-		if (!isContinuousSelection(selections)) {
+
+		const domSelection = window.getSelection();
+		if (!domSelection || domSelection.isCollapsed || domSelection.rangeCount !== 1) {
 			return null;
 		}
-		const selection = selections[0];
-		const [from, to] =
-			comparePositions(selection.anchor, selection.head) <= 0
-				? [selection.anchor, selection.head]
-				: [selection.head, selection.anchor];
-		const text = editor.getRange(from, to);
-		if (!text.trim()) {
+		const previewContainer = markdownView.previewMode?.containerEl ?? markdownView.containerEl;
+		if (!this.selectionBelongsToContainer(domSelection, previewContainer)) {
 			return null;
 		}
-		const view = this.findEditorView(markdownView);
-		if (!view) {
+
+		const selectedText = domSelection.toString().trim();
+		if (!selectedText) {
 			return null;
 		}
+		const preferredOffset = editor.posToOffset(editor.getCursor());
+		const sourceRange = resolveSelectionSourceRange(noteText, selectedText, preferredOffset, "preview");
+		if (!sourceRange) {
+			new Notice("阅读模式选区暂时无法映射到源码，请切换到源码模式后再试。");
+			return null;
+		}
+		const from = editor.offsetToPos(sourceRange.fromOffset);
+		const to = editor.offsetToPos(sourceRange.toOffset);
+		const rect = domSelection.getRangeAt(0).getBoundingClientRect();
+		const noteContext = buildSelectionContextWindow({
+			noteText,
+			fromOffset: sourceRange.fromOffset,
+			toOffset: sourceRange.toOffset,
+			selectedText: sourceRange.targetText,
+			mode,
+			windowLines: 6,
+			maxCharacters: 1800
+		});
+
 		return {
-			view,
 			editor,
 			markdownView,
 			file: markdownView.file,
+			mode,
+			rect: {
+				left: rect.left,
+				top: rect.top,
+				right: rect.right,
+				bottom: rect.bottom
+			},
 			from,
 			to,
-			fromOffset: editor.posToOffset(from),
-			toOffset: editor.posToOffset(to),
-			text
+			fromOffset: sourceRange.fromOffset,
+			toOffset: sourceRange.toOffset,
+			text: sourceRange.targetText,
+			noteText,
+			noteContext
 		};
 	}
 
@@ -347,7 +497,9 @@ export class InlineEditManager {
 			fromOffset: context.editor.posToOffset(from),
 			toOffset: context.editor.posToOffset(to),
 			targetText: context.text,
-			noteText: context.editor.getValue(),
+			sourceText: context.editor.getRange(from, to),
+			noteText: context.noteText,
+			noteContext: context.noteContext,
 			noteTitle: context.file.basename,
 			mode: action.mode
 		};
@@ -376,7 +528,16 @@ export class InlineEditManager {
 			fromOffset: editor.posToOffset(from),
 			toOffset: editor.posToOffset(to),
 			targetText: action.mode === "note" ? noteText : paragraph?.text ?? "",
+			sourceText: action.mode === "note" ? noteText : paragraph?.text ?? "",
 			noteText,
+			noteContext: buildSelectionContextWindow({
+				noteText,
+				fromOffset: editor.posToOffset(from),
+				toOffset: editor.posToOffset(to),
+				mode: "source",
+				windowLines: 6,
+				maxCharacters: 1800
+			}),
 			noteTitle: file.basename,
 			mode
 		};
@@ -395,7 +556,10 @@ export class InlineEditManager {
 			filePath: context.file.path,
 			fromOffset: context.fromOffset,
 			toOffset: context.toOffset,
-			originalText: context.targetText,
+			originalText: getInlineEditDraftOriginalText({
+				targetText: context.targetText,
+				sourceText: context.sourceText
+			}),
 			proposedText: "",
 			status: "generating",
 			requestId
@@ -406,11 +570,16 @@ export class InlineEditManager {
 		this.pushDraftToView();
 
 		const settings = this.options.getSettings();
+		const vaultNoteTitles = context.action.id === "wiki-link" ? this.getVaultNoteTitlesForWiki(context) : undefined;
 		const prompt = buildInlineEditPrompt({
 			action: context.action,
 			targetText: context.action.mode === "note" ? "" : context.targetText,
+			sourceText: context.sourceText,
 			noteText: context.action.mode === "note" ? context.noteText : undefined,
+			noteContext: context.noteContext,
 			noteTitle: context.noteTitle,
+			vaultNoteTitles,
+			customInstruction: context.customInstruction,
 			followUp: context.followUp,
 			currentProposal: context.currentProposal
 		});
@@ -545,6 +714,32 @@ export class InlineEditManager {
 		return editorEl instanceof HTMLElement ? EditorView.findFromDOM(editorEl) : null;
 	}
 
+	private selectionBelongsToContainer(selection: Selection, container: HTMLElement): boolean {
+		const anchor = selection.anchorNode;
+		const focus = selection.focusNode;
+		return Boolean(anchor && focus && container.contains(anchor) && container.contains(focus));
+	}
+
+	private getVaultNoteTitlesForWiki(context: InlineEditRequestContext): string[] {
+		const titles = this.options.app.vault
+			.getMarkdownFiles()
+			.filter((file) => file.path !== context.file.path)
+			.map((file) => file.basename);
+		return selectVaultNoteTitlesForWikiPrompt({
+			titles,
+			targetText: `${context.targetText}\n${context.sourceText ?? ""}`,
+			noteTitle: context.noteTitle,
+			limit: 100
+		});
+	}
+
+	private async promptForCustomInstruction(): Promise<string | null> {
+		return new Promise((resolve) => {
+			const modal = new InlineEditCustomPromptModal(this.options.app, resolve);
+			modal.open();
+		});
+	}
+
 	private syncCurrentDraftFromView(): void {
 		if (!this.currentView || !this.currentDraft) {
 			return;
@@ -613,6 +808,116 @@ class HermesInlineSlashSuggest extends EditorSuggest<InlineEditAction> {
 			return;
 		}
 		void this.manager.runSlashAction(value, this.context);
+	}
+}
+
+class InlineEditCustomPromptModal {
+	private resolve: (value: string | null) => void;
+	private didResolve = false;
+	private panelEl: HTMLDivElement | null = null;
+	private inputEl: HTMLTextAreaElement | null = null;
+	private previouslyFocusedEl: HTMLElement | null = null;
+	private outsideClickHandler = (event: PointerEvent): void => {
+		if (!this.panelEl || !(event.target instanceof Node) || this.panelEl.contains(event.target)) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		this.dismiss(null);
+	};
+	private keydownHandler = (event: KeyboardEvent): void => {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			event.stopPropagation();
+			this.dismiss(null);
+			return;
+		}
+		if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+			event.preventDefault();
+			event.stopPropagation();
+			this.dismiss(this.inputEl?.value.trim() || null);
+		}
+	};
+
+	constructor(_app: App, resolve: (value: string | null) => void) {
+		this.resolve = resolve;
+	}
+
+	open(): void {
+		if (this.panelEl) {
+			return;
+		}
+		this.previouslyFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+		const dialog = document.body.createDiv({ cls: "hermes-inline-custom-modal" });
+		dialog.setAttribute("role", "dialog");
+		dialog.setAttribute("aria-modal", "false");
+		dialog.setAttribute("aria-label", "自定义提问");
+
+		const header = dialog.createDiv({ cls: "hermes-inline-custom-header" });
+		const titleWrap = header.createDiv({ cls: "hermes-inline-custom-title-wrap" });
+		titleWrap.createEl("h2", { text: "自定义提问" });
+		titleWrap.createDiv({
+			cls: "hermes-inline-custom-hint",
+			text: "用一句话告诉 Hermes 你想怎么改。"
+		});
+		const closeButton = header.createEl("button", {
+			cls: "hermes-inline-custom-close",
+			text: "×",
+			attr: { type: "button", "aria-label": "关闭" }
+		});
+
+		const input = dialog.createEl("textarea", {
+			cls: "hermes-inline-custom-input",
+			attr: {
+				rows: "5",
+				placeholder: "比如：整理成更有力量的 Markdown；把表格改成更清楚的行动清单；语气更冷静一点..."
+			}
+		});
+
+		const actions = dialog.createDiv({ cls: "hermes-inline-custom-actions" });
+		const cancel = actions.createEl("button", { text: "取消", attr: { type: "button" } });
+		const submit = actions.createEl("button", {
+			cls: "mod-cta",
+			text: "生成预览",
+			attr: { type: "button" }
+		});
+
+		this.panelEl = dialog;
+		this.inputEl = input;
+
+		closeButton.addEventListener("click", () => this.dismiss(null));
+		cancel.addEventListener("click", () => this.dismiss(null));
+		submit.addEventListener("click", () => this.dismiss(input.value.trim() || null));
+		document.addEventListener("pointerdown", this.outsideClickHandler, true);
+		document.addEventListener("keydown", this.keydownHandler, true);
+		window.setTimeout(() => {
+			input.focus({ preventScroll: true });
+			input.select();
+		}, 0);
+	}
+
+	private dismiss(value: string | null): void {
+		this.finish(value);
+		this.teardown();
+	}
+
+	private teardown(): void {
+		document.removeEventListener("pointerdown", this.outsideClickHandler, true);
+		document.removeEventListener("keydown", this.keydownHandler, true);
+		this.panelEl?.remove();
+		this.panelEl = null;
+		this.inputEl = null;
+		this.previouslyFocusedEl?.focus({ preventScroll: true });
+		this.previouslyFocusedEl = null;
+	}
+
+	private finish(value: string | null): void {
+		if (this.didResolve) {
+			return;
+		}
+		this.didResolve = true;
+		this.resolve(value);
 	}
 }
 

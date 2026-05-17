@@ -452,6 +452,7 @@ def main() -> int:
     reasoning_previews: list[str] = []
     reasoning_delta_parts: list[str] = []
     last_reasoning_delta_text = ""
+    last_emitted_reasoning_preview = ""
 
     def on_interim(text: str, *, already_streamed: bool = False) -> None:
         visible = str(text or "").strip()
@@ -476,7 +477,7 @@ def main() -> int:
         args: Any,
         **metadata: Any,
     ) -> None:
-        nonlocal last_reasoning_delta_text
+        nonlocal last_reasoning_delta_text, last_emitted_reasoning_preview
         is_reasoning_event = event_type in {"_thinking", "reasoning.available"}
         if is_reasoning_event:
             preview_text = compact_preview(preview or args, max_length=2000)
@@ -491,6 +492,9 @@ def main() -> int:
             if not should_display_reasoning_delta(delta):
                 return
             preview_text = append_reasoning_delta_preview(reasoning_delta_parts, delta, max_length=2000)
+            if preview_text == last_emitted_reasoning_preview:
+                return
+            last_emitted_reasoning_preview = preview_text
             emit_activity(
                 event_type=event_type,
                 tool_name="thinking",
@@ -526,7 +530,7 @@ def main() -> int:
         emit({"type": "status", "text": humanize_status(event_type, message)})
 
     def on_reasoning_delta(text: str) -> None:
-        nonlocal last_reasoning_delta_text
+        nonlocal last_reasoning_delta_text, last_emitted_reasoning_preview
         delta, next_reasoning_text = extract_new_reasoning_delta(last_reasoning_delta_text, text)
         last_reasoning_delta_text = next_reasoning_text
         if not should_display_reasoning_delta(delta):
@@ -534,6 +538,9 @@ def main() -> int:
         preview_text = append_reasoning_delta_preview(reasoning_delta_parts, delta, max_length=2000)
         if not preview_text:
             return
+        if preview_text == last_emitted_reasoning_preview:
+            return
+        last_emitted_reasoning_preview = preview_text
         emit_activity(
             event_type="_thinking",
             tool_name="thinking",

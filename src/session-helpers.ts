@@ -35,6 +35,14 @@ export interface SelectionRefreshInput {
 	keepExistingWhenEmpty?: boolean;
 }
 
+export interface ComposerShortcutInput {
+	key: string;
+	shiftKey?: boolean;
+	metaKey?: boolean;
+	ctrlKey?: boolean;
+	altKey?: boolean;
+}
+
 export interface MessageIdLike {
 	id?: string | null;
 }
@@ -52,6 +60,54 @@ export type BridgeEventRenderType =
 	| "final"
 	| "error";
 
+export interface ActivityTimelineEntryLike {
+	status?: string | null;
+	toolName?: string | null;
+	preview?: string | null;
+}
+
+export interface ActivityTimelineVisibilityResult<T extends ActivityTimelineEntryLike = ActivityTimelineEntryLike> {
+	visibleEntries: T[];
+	hiddenCount: number;
+	totalCount: number;
+}
+
+export interface ActivityMessageLike {
+	pending?: boolean | null;
+	activities?: Array<ActivityTimelineEntryLike | null | undefined> | null;
+}
+
+export interface ActivityMessageVisibilityResult<T extends ActivityMessageLike = ActivityMessageLike> {
+	visibleMessages: T[];
+	hiddenCount: number;
+	totalCount: number;
+}
+
+export function getActivityChainTailVisibleCount<T extends ActivityMessageLike>(messages: T[]): number {
+	const filtered = messages.filter((message) =>
+		(message.activities ?? []).some((entry) => {
+			if (!entry) {
+				return false;
+			}
+			return shouldShowActivityEntry(entry.toolName);
+		})
+	);
+	if (filtered.length <= 1) {
+		return 1;
+	}
+
+	const latestVisibleMessage = filtered[filtered.length - 1];
+	const visibleEntries = (latestVisibleMessage.activities ?? []).filter((entry): entry is ActivityTimelineEntryLike => {
+		if (!entry) {
+			return false;
+		}
+		return shouldShowActivityEntry(entry.toolName);
+	});
+	const latestVisibleEntry = visibleEntries.length > 0 ? visibleEntries[visibleEntries.length - 1] : null;
+
+	return latestVisibleEntry?.toolName === "thinking" ? 2 : 1;
+}
+
 export function formatSelectionPreview(text: string, maxLength = 48): string {
 	const compact = text.replace(/\s+/g, " ").trim();
 	if (!compact) {
@@ -66,6 +122,13 @@ export function formatSelectionPreview(text: string, maxLength = 48): string {
 export function buildSessionTitle(text: string, maxLength = 24): string {
 	const preview = formatSelectionPreview(text, maxLength);
 	return preview || DEFAULT_SESSION_TITLE;
+}
+
+export function isComposerSendShortcut(input: ComposerShortcutInput): boolean {
+	if (input.key !== "Enter" || input.altKey) {
+		return false;
+	}
+	return !!(input.shiftKey || input.metaKey || input.ctrlKey);
 }
 
 export function pickNextActiveSessionId(
@@ -133,6 +196,78 @@ export function canUpdateBridgeEventWithoutFullRender(type: BridgeEventRenderTyp
 
 export function shouldShowActivityEntry(toolName?: string | null): boolean {
 	return (toolName || "").trim() !== "run.config";
+}
+
+export function formatActivityTimelineSummary(totalCount: number, hiddenCount: number): string {
+	if (totalCount <= 0) {
+		return "";
+	}
+	if (hiddenCount > 0 && hiddenCount < totalCount) {
+		return `过程 · ${totalCount} 条 · 已折叠 ${hiddenCount} 条`;
+	}
+	return `过程 · ${totalCount} 条`;
+}
+
+export function getVisibleActivityTimelineEntries<T extends ActivityTimelineEntryLike>(
+	entries: T[],
+	expanded = false,
+	tailVisibleCount = 1,
+	includeCollapsedTail = true
+): ActivityTimelineVisibilityResult<T> {
+	const filtered = entries.filter((entry) => shouldShowActivityEntry(entry.toolName));
+	if (filtered.length === 0) {
+		return { visibleEntries: [], hiddenCount: 0, totalCount: 0 };
+	}
+	if (expanded || (includeCollapsedTail && filtered.length <= tailVisibleCount)) {
+		return { visibleEntries: filtered, hiddenCount: 0, totalCount: filtered.length };
+	}
+
+	const visibleIndexes = new Set<number>();
+	if (includeCollapsedTail) {
+		const latestIndex = Math.max(0, filtered.length - tailVisibleCount);
+		for (let index = latestIndex; index < filtered.length; index += 1) {
+			visibleIndexes.add(index);
+		}
+	}
+
+	const visibleEntries = filtered.filter((_, index) => visibleIndexes.has(index));
+	return {
+		visibleEntries,
+		hiddenCount: filtered.length - visibleEntries.length,
+		totalCount: filtered.length
+	};
+}
+
+export function getVisibleActivityMessages<T extends ActivityMessageLike>(
+	messages: T[],
+	expanded = false,
+	tailVisibleCount = 1,
+	includeCollapsedTail = true
+): ActivityMessageVisibilityResult<T> {
+	const filtered = messages.filter((message) =>
+		(message.activities ?? []).some((entry) => entry && shouldShowActivityEntry(entry.toolName))
+	);
+	if (filtered.length === 0) {
+		return { visibleMessages: [], hiddenCount: 0, totalCount: 0 };
+	}
+	if (expanded || (includeCollapsedTail && filtered.length <= tailVisibleCount)) {
+		return { visibleMessages: filtered, hiddenCount: 0, totalCount: filtered.length };
+	}
+
+	const visibleIndexes = new Set<number>();
+	if (includeCollapsedTail) {
+		const latestIndex = Math.max(0, filtered.length - tailVisibleCount);
+		for (let index = latestIndex; index < filtered.length; index += 1) {
+			visibleIndexes.add(index);
+		}
+	}
+
+	const visibleMessages = filtered.filter((_, index) => visibleIndexes.has(index));
+	return {
+		visibleMessages,
+		hiddenCount: filtered.length - visibleMessages.length,
+		totalCount: filtered.length
+	};
 }
 
 export function shouldMergeActivityEntry(

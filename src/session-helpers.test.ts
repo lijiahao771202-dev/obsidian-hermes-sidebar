@@ -11,16 +11,30 @@ import {
 	getInsertIndexAfterMessage,
 	shouldHideStatusText,
 	canUpdateBridgeEventWithoutFullRender,
+	formatActivityTimelineSummary,
+	getActivityChainTailVisibleCount,
+	getVisibleActivityMessages,
+	isComposerSendShortcut,
 	shouldMergeActivityEntry,
 	shouldShowActivityEntry,
 	shouldRestoreComposerFocus,
 	shouldDeferScrollRestore,
+	getVisibleActivityTimelineEntries,
 	getNextStickToBottom,
 	getRestoredScrollTop,
 	pickNextActiveSessionId,
 	pickSelectionText,
 	shouldStickToBottom
 } from "./session-helpers.ts";
+
+test("isComposerSendShortcut sends on Shift+Enter or platform submit chords only", () => {
+	assert.equal(isComposerSendShortcut({ key: "Enter", shiftKey: true }), true);
+	assert.equal(isComposerSendShortcut({ key: "Enter", metaKey: true }), true);
+	assert.equal(isComposerSendShortcut({ key: "Enter", ctrlKey: true }), true);
+	assert.equal(isComposerSendShortcut({ key: "Enter" }), false);
+	assert.equal(isComposerSendShortcut({ key: "Enter", altKey: true }), false);
+	assert.equal(isComposerSendShortcut({ key: "Escape", shiftKey: true }), false);
+});
 
 test("formatSelectionPreview collapses whitespace and truncates long selections", () => {
 	assert.equal(
@@ -182,6 +196,189 @@ test("shouldShowActivityEntry hides run configuration from the visible timeline"
 	assert.equal(shouldShowActivityEntry(" terminal "), true);
 	assert.equal(shouldShowActivityEntry("thinking"), true);
 	assert.equal(shouldShowActivityEntry(undefined), true);
+});
+
+test("getVisibleActivityTimelineEntries keeps only the latest completed entries by default", () => {
+	const entries = Array.from({ length: 20 }, (_, index) => ({
+		toolName: "terminal",
+		status: "done",
+		preview: `step-${index + 1}`
+	}));
+
+	const result = getVisibleActivityTimelineEntries(entries, false, 1);
+	assert.equal(result.totalCount, 20);
+	assert.equal(result.hiddenCount, 19);
+	assert.deepEqual(result.visibleEntries.map((entry) => entry.preview), ["step-20"]);
+});
+
+test("getVisibleActivityTimelineEntries can fully collapse completed timelines", () => {
+	const entries = [
+		{ toolName: "terminal", status: "done", preview: "step-1" },
+		{ toolName: "terminal", status: "done", preview: "step-2" },
+		{ toolName: "thinking", status: "done", preview: "step-3" },
+		{ toolName: "terminal", status: "done", preview: "step-4" },
+		{ toolName: "terminal", status: "done", preview: "step-5" }
+	];
+
+	const result = getVisibleActivityTimelineEntries(entries, false, 1, false);
+	assert.equal(result.hiddenCount, 5);
+	assert.deepEqual(result.visibleEntries.map((entry) => entry.preview), []);
+});
+
+test("getVisibleActivityTimelineEntries fully collapses a single completed entry when collapsed tail is disabled", () => {
+	const entries = [{ toolName: "thinking", status: "done", preview: "step-1" }];
+
+	const result = getVisibleActivityTimelineEntries(entries, false, 1, false);
+	assert.equal(result.totalCount, 1);
+	assert.equal(result.hiddenCount, 1);
+	assert.deepEqual(result.visibleEntries, []);
+	assert.equal(formatActivityTimelineSummary(result.totalCount, result.hiddenCount), "过程 · 1 条");
+});
+
+test("getVisibleActivityTimelineEntries keeps the latest entry visible while a run is active", () => {
+	const entries = [
+		{ toolName: "terminal", status: "done", preview: "step-1" },
+		{ toolName: "terminal", status: "error", preview: "step-2" },
+		{ toolName: "thinking", status: "running", preview: "step-3" },
+		{ toolName: "terminal", status: "done", preview: "step-4" },
+		{ toolName: "terminal", status: "done", preview: "step-5" }
+	];
+
+	const result = getVisibleActivityTimelineEntries(entries, false, 1, true);
+	assert.equal(result.hiddenCount, 4);
+	assert.deepEqual(result.visibleEntries.map((entry) => entry.preview), ["step-5"]);
+});
+
+test("getVisibleActivityTimelineEntries shows all entries when expanded", () => {
+	const entries = [
+		{ toolName: "terminal", status: "done", preview: "step-1" },
+		{ toolName: "thinking", status: "done", preview: "step-2" },
+		{ toolName: "terminal", status: "error", preview: "step-3" }
+	];
+
+	const result = getVisibleActivityTimelineEntries(entries, true, 1);
+	assert.equal(result.hiddenCount, 0);
+	assert.deepEqual(
+		result.visibleEntries.map((entry) => entry.preview),
+		["step-1", "step-2", "step-3"]
+	);
+});
+
+test("getVisibleActivityTimelineEntries does not hide short timelines", () => {
+	const entries = [
+		{ toolName: "terminal", status: "done", preview: "step-1" },
+		{ toolName: "terminal", status: "done", preview: "step-2" }
+	];
+
+	const result = getVisibleActivityTimelineEntries(entries, false, 1);
+	assert.equal(result.hiddenCount, 1);
+	assert.equal(formatActivityTimelineSummary(result.totalCount, result.hiddenCount), "过程 · 2 条 · 已折叠 1 条");
+});
+
+test("formatActivityTimelineSummary includes hidden counts", () => {
+	assert.equal(formatActivityTimelineSummary(20, 16), "过程 · 20 条 · 已折叠 16 条");
+});
+
+test("getVisibleActivityMessages keeps only the latest completed activity message when collapsed tail is enabled", () => {
+	const messages = Array.from({ length: 20 }, (_, index) => ({
+		pending: false,
+		activities: [
+			{
+				toolName: "terminal",
+				status: "done",
+				preview: `message-${index + 1}`
+			}
+		]
+	}));
+
+	const result = getVisibleActivityMessages(messages, false, 1);
+	assert.equal(result.totalCount, 20);
+	assert.equal(result.hiddenCount, 19);
+	assert.deepEqual(
+		result.visibleMessages.map((message) => message.activities?.[0]?.preview),
+		["message-20"]
+	);
+});
+
+test("getVisibleActivityMessages can fully collapse completed activity chains", () => {
+	const messages = [
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-1" }] },
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-2" }] },
+		{ pending: false, activities: [{ toolName: "thinking", status: "done", preview: "message-3" }] }
+	];
+
+	const result = getVisibleActivityMessages(messages, false, 1, false);
+	assert.equal(result.hiddenCount, 3);
+	assert.deepEqual(result.visibleMessages.map((message) => message.activities?.[0]?.preview), []);
+});
+
+test("getVisibleActivityMessages fully collapses a single completed activity message when collapsed tail is disabled", () => {
+	const messages = [{ pending: false, activities: [{ toolName: "thinking", status: "done", preview: "message-1" }] }];
+
+	const result = getVisibleActivityMessages(messages, false, 1, false);
+	assert.equal(result.totalCount, 1);
+	assert.equal(result.hiddenCount, 1);
+	assert.deepEqual(result.visibleMessages, []);
+	assert.equal(formatActivityTimelineSummary(result.totalCount, result.hiddenCount), "过程 · 1 条");
+});
+
+test("getVisibleActivityMessages keeps only the latest activity message visible while a run is active", () => {
+	const messages = [
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-1" }] },
+		{ pending: false, activities: [{ toolName: "terminal", status: "error", preview: "message-2" }] },
+		{ pending: true, activities: [{ toolName: "thinking", status: "running", preview: "message-3" }] },
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-4" }] },
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-5" }] }
+	];
+
+	const result = getVisibleActivityMessages(messages, false, 1, true);
+	assert.equal(result.hiddenCount, 4);
+	assert.deepEqual(
+		result.visibleMessages.map((message) => message.activities?.[0]?.preview),
+		["message-5"]
+	);
+});
+
+test("getActivityChainTailVisibleCount keeps the latest real tool visible when thinking is the newest step", () => {
+	const messages = [
+		{ pending: false, activities: [{ toolName: "read_file", status: "done", preview: "a.md" }] },
+		{ pending: true, activities: [{ toolName: "thinking", status: "running", preview: "让我想想" }] }
+	];
+
+	assert.equal(getActivityChainTailVisibleCount(messages), 2);
+	assert.equal(
+		getActivityChainTailVisibleCount([
+			{ pending: false, activities: [{ toolName: "read_file", status: "done", preview: "a.md" }] },
+			{ pending: false, activities: [{ toolName: "terminal", status: "running", preview: "ls" }] }
+		]),
+		1
+	);
+});
+
+test("getVisibleActivityMessages shows all activity messages when expanded", () => {
+	const messages = [
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-1" }] },
+		{ pending: false, activities: [{ toolName: "thinking", status: "done", preview: "message-2" }] },
+		{ pending: false, activities: [{ toolName: "terminal", status: "error", preview: "message-3" }] }
+	];
+
+	const result = getVisibleActivityMessages(messages, true, 1);
+	assert.equal(result.hiddenCount, 0);
+	assert.deepEqual(
+		result.visibleMessages.map((message) => message.activities?.[0]?.preview),
+		["message-1", "message-2", "message-3"]
+	);
+});
+
+test("getVisibleActivityMessages fully hides short completed activity chains when collapsed tail is disabled", () => {
+	const messages = [
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-1" }] },
+		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-2" }] }
+	];
+
+	const result = getVisibleActivityMessages(messages, false, 1, false);
+	assert.equal(result.hiddenCount, 2);
+	assert.equal(formatActivityTimelineSummary(result.totalCount, result.hiddenCount), "过程 · 2 条");
 });
 
 test("shouldMergeActivityEntry keeps streaming thinking in a single visible row", () => {
