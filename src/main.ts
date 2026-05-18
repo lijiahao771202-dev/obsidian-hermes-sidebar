@@ -1,6 +1,7 @@
 import {
 	App,
 	EditorPosition,
+	editorEditorField,
 	ItemView,
 	MarkdownRenderer,
 	MarkdownView,
@@ -10,8 +11,11 @@ import {
 	PluginSettingTab,
 	setIcon,
 	Setting,
+	TFile,
 	WorkspaceLeaf
 } from "obsidian";
+import { StateEffect, StateField, type Extension, type Text } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,6 +58,11 @@ import {
 	composeObsidianPrompt,
 	looksLikeInternalReasoningText
 } from "./bridge-helpers";
+import {
+	buildChatWriteReviewInlinePreview,
+	resolveChatWriteReviewTargetPath,
+	type ChatWriteReviewInlinePreview
+} from "./chat-write-review-helpers";
 import { buildSelectionContextWindow } from "./inline-edit-helpers";
 import { InlineEditManager, type InlineEditRunInput } from "./inline-edit";
 
@@ -252,6 +261,44 @@ interface HermesBridgeControlMessage {
 	approved: boolean;
 }
 
+interface HermesInlineWriteReviewPayload {
+	review: HermesWriteReviewRequest;
+	preview: ChatWriteReviewInlinePreview;
+	onApprove: () => void;
+	onCancel: () => void;
+}
+
+interface HermesInlineWriteReviewFieldState {
+	payload: HermesInlineWriteReviewPayload | null;
+	decorations: DecorationSet;
+}
+
+const setHermesInlineWriteReviewEffect = StateEffect.define<HermesInlineWriteReviewPayload | null>();
+
+const hermesInlineWriteReviewField = StateField.define<HermesInlineWriteReviewFieldState>({
+	create: () => ({ payload: null, decorations: Decoration.none }),
+	update(value, transaction) {
+		let payload = value.payload;
+		for (const effect of transaction.effects) {
+			if (effect.is(setHermesInlineWriteReviewEffect)) {
+				payload = effect.value;
+			}
+		}
+		if (payload === value.payload && !transaction.docChanged) {
+			return value;
+		}
+		return {
+			payload,
+			decorations: buildHermesInlineWriteReviewDecorations(payload, transaction.state.doc)
+		};
+	},
+	provide: (field) => EditorView.decorations.from(field, (value) => value.decorations)
+});
+
+function createHermesInlineWriteReviewExtension(): Extension {
+	return [hermesInlineWriteReviewField];
+}
+
 interface HermesActivityEntry {
 	id: string;
 	text: string;
@@ -327,6 +374,7 @@ class HermesSidebarPlugin extends Plugin {
 			}),
 			run: (input) => runInlineHermesBridge(this, input)
 		});
+		this.registerEditorExtension(createHermesInlineWriteReviewExtension());
 
 		this.registerView(VIEW_TYPE_HERMES_SIDEBAR, (leaf) => new HermesSidebarView(leaf, this));
 
@@ -753,6 +801,53 @@ class HermesSidebarPlugin extends Plugin {
 			}
 			view.requestRefresh();
 		}
+	}
+
+	resolveWriteReviewMarkdownFile(reviewFilePath?: string): TFile | null {
+		const markdownFiles = this.app.vault.getMarkdownFiles();
+		const targetPath = resolveChatWriteReviewTargetPath(
+			reviewFilePath,
+			markdownFiles.map((file) => file.path)
+		);
+		if (!targetPath) {
+			return null;
+		}
+		return markdownFiles.find((file) => file.path === targetPath) ?? null;
+	}
+
+	async revealMarkdownFileForReview(file: TFile): Promise<MarkdownView | null> {
+		const existingLeaf = this.app.workspace
+			.getLeavesOfType("markdown")
+			.find((leaf) => leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path);
+		if (existingLeaf?.view instanceof MarkdownView) {
+			this.app.workspace.revealLeaf(existingLeaf);
+			await this.ensureMarkdownReviewSourceMode(existingLeaf, file);
+			return existingLeaf.view instanceof MarkdownView ? existingLeaf.view : null;
+		}
+
+		const markdownLeaf =
+			this.app.workspace.getMostRecentLeaf()?.view instanceof MarkdownView
+				? this.app.workspace.getMostRecentLeaf()
+				: this.app.workspace.getLeavesOfType("markdown")[0] ?? this.app.workspace.getLeaf("tab");
+		if (!markdownLeaf) {
+			return null;
+		}
+		await markdownLeaf.openFile(file, { active: true, state: { mode: "source" } });
+		await this.ensureMarkdownReviewSourceMode(markdownLeaf, file);
+		return markdownLeaf.view instanceof MarkdownView ? markdownLeaf.view : null;
+	}
+
+	private async ensureMarkdownReviewSourceMode(leaf: WorkspaceLeaf, file: TFile): Promise<void> {
+		if (leaf.view instanceof MarkdownView && leaf.view.getMode() === "source") {
+			await nextAnimationFrame();
+			return;
+		}
+		await leaf.setViewState({
+			type: "markdown",
+			state: { file: file.path, mode: "source" },
+			active: true
+		});
+		await nextAnimationFrame();
 	}
 
 	async activateView(): Promise<HermesSidebarView> {
@@ -2769,6 +2864,16 @@ class HermesSidebarView extends ItemView {
 	}
 
 	private async confirmChatWriteReview(review: HermesWriteReviewRequest): Promise<boolean> {
+		const inlinePreview = buildChatWriteReviewInlinePreview(review);
+		const targetFile = inlinePreview ? this.plugin.resolveWriteReviewMarkdownFile(inlinePreview.filePath) : null;
+		if (inlinePreview && targetFile) {
+			const markdownView = await this.plugin.revealMarkdownFileForReview(targetFile);
+			const editorView = markdownView ? findEditorView(markdownView) : null;
+			if (editorView) {
+				return this.confirmInlineChatWriteReview(editorView, review, inlinePreview);
+			}
+		}
+
 		this.statusText = `等待确认写入 ${basename(review.filePath || "文件")}`;
 		return new Promise((resolve) => {
 			const modal = new HermesWriteReviewModal(this.app, review, (approved) => {
@@ -2778,6 +2883,41 @@ class HermesSidebarView extends ItemView {
 				resolve(approved);
 			});
 			modal.open();
+		});
+	}
+
+	private async confirmInlineChatWriteReview(
+		editorView: EditorView,
+		review: HermesWriteReviewRequest,
+		preview: ChatWriteReviewInlinePreview
+	): Promise<boolean> {
+		this.statusText = `在原文中确认 ${basename(review.filePath || "文件")}`;
+		const firstLine = Math.max(1, Math.min(editorView.state.doc.lines, preview.firstLine + 1));
+		editorView.dispatch({
+			selection: { anchor: editorView.state.doc.line(firstLine).from },
+			scrollIntoView: true
+		});
+		return new Promise((resolve) => {
+			let settled = false;
+			const finish = (approved: boolean) => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				editorView.dispatch({ effects: setHermesInlineWriteReviewEffect.of(null) });
+				if (!approved) {
+					this.statusText = "已取消这次写入";
+				}
+				resolve(approved);
+			};
+			editorView.dispatch({
+				effects: setHermesInlineWriteReviewEffect.of({
+					review,
+					preview,
+					onApprove: () => finish(true),
+					onCancel: () => finish(false)
+				})
+			});
 		});
 	}
 
@@ -2881,6 +3021,144 @@ class HermesSidebarView extends ItemView {
 			currentlySticking: this.shouldAutoStickToBottom
 		});
 	}
+}
+
+class HermesInlineWriteReviewHeaderWidget extends WidgetType {
+	private payload: HermesInlineWriteReviewPayload;
+
+	constructor(payload: HermesInlineWriteReviewPayload) {
+		super();
+		this.payload = payload;
+	}
+
+	eq(other: WidgetType): boolean {
+		return other instanceof HermesInlineWriteReviewHeaderWidget && other.payload === this.payload;
+	}
+
+	toDOM(): HTMLElement {
+		const root = document.createElement("div");
+		root.className = "hermes-chat-inline-review-card";
+		const title = root.createDiv({ cls: "hermes-chat-inline-review-title" });
+		title.createSpan({ text: this.payload.review.title?.trim() || "确认聊天写入" });
+		const meta = this.payload.review.meta?.trim();
+		if (meta) {
+			root.createDiv({ cls: "hermes-chat-inline-review-meta", text: meta });
+		}
+		const path = this.payload.review.filePath?.trim();
+		if (path) {
+			root.createEl("code", { cls: "hermes-chat-inline-review-path", text: path });
+		}
+		const actions = root.createDiv({ cls: "hermes-chat-inline-review-actions" });
+		const cancel = actions.createEl("button", { text: "取消", attr: { type: "button" } });
+		const approve = actions.createEl("button", {
+			cls: "mod-cta",
+			text: "确认写入",
+			attr: { type: "button" }
+		});
+		cancel.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			this.payload.onCancel();
+		});
+		approve.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			this.payload.onApprove();
+		});
+		return root;
+	}
+}
+
+class HermesInlineWriteReviewAdditionWidget extends WidgetType {
+	private addition: { lines: string[] };
+
+	constructor(addition: { lines: string[] }) {
+		super();
+		this.addition = addition;
+	}
+
+	eq(other: WidgetType): boolean {
+		return other instanceof HermesInlineWriteReviewAdditionWidget && other.addition.lines.join("\n") === this.addition.lines.join("\n");
+	}
+
+	toDOM(): HTMLElement {
+		const root = document.createElement("div");
+		root.className = "hermes-chat-inline-review-addition";
+		for (const line of this.addition.lines) {
+			root.createDiv({ cls: "hermes-chat-inline-review-add-line", text: `+${line}` });
+		}
+		return root;
+	}
+}
+
+function buildHermesInlineWriteReviewDecorations(
+	payload: HermesInlineWriteReviewPayload | null,
+	doc: Text
+): DecorationSet {
+	if (!payload) {
+		return Decoration.none;
+	}
+	const ranges = [];
+	const firstLine = Math.max(1, Math.min(doc.lines, payload.preview.firstLine + 1));
+	ranges.push(
+		Decoration.widget({
+			widget: new HermesInlineWriteReviewHeaderWidget(payload),
+			block: true,
+			side: -1
+		}).range(doc.line(firstLine).from)
+	);
+
+	for (const deletion of payload.preview.deletions) {
+		const fromLine = Math.max(0, deletion.fromLine);
+		const toLine = Math.min(doc.lines - 1, deletion.toLine);
+		if (toLine < fromLine) {
+			continue;
+		}
+		for (let lineIndex = fromLine; lineIndex <= toLine; lineIndex += 1) {
+			const line = doc.line(lineIndex + 1);
+			ranges.push(Decoration.line({ class: "hermes-chat-inline-review-delete-line" }).range(line.from));
+			if (line.from < line.to) {
+				ranges.push(Decoration.mark({ class: "hermes-chat-inline-review-delete-text" }).range(line.from, line.to));
+			}
+		}
+	}
+
+	for (const addition of payload.preview.additions) {
+		const pos =
+			addition.afterLine < 0
+				? 0
+				: doc.line(Math.max(1, Math.min(doc.lines, addition.afterLine + 1))).to;
+		ranges.push(
+			Decoration.widget({
+				widget: new HermesInlineWriteReviewAdditionWidget(addition),
+				block: true,
+				side: 1
+			}).range(pos)
+		);
+	}
+
+	return Decoration.set(ranges, true);
+}
+
+function findEditorView(markdownView: MarkdownView): EditorView | null {
+	try {
+		const editorWithCm = markdownView.editor as {
+			cm?: { state?: { field?: (field: typeof editorEditorField, require?: boolean) => unknown } };
+		};
+		const state = editorWithCm.cm?.state;
+		const view = state?.field ? state.field(editorEditorField, false) : null;
+		if (view instanceof EditorView) {
+			return view;
+		}
+	} catch {
+		// Fall back to DOM lookup below.
+	}
+	const editorEl = markdownView.containerEl.querySelector(".cm-editor");
+	return editorEl instanceof HTMLElement ? EditorView.findFromDOM(editorEl) : null;
+}
+
+function nextAnimationFrame(): Promise<void> {
+	return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
 class HermesImagePreviewModal extends Modal {
