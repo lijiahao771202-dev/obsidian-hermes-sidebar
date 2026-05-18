@@ -7,6 +7,7 @@ import {
 	buildReplayUserContent,
 	buildTurnUserText,
 	composeObsidianPrompt,
+	looksLikeInternalReasoningText,
 	pickBridgeFinalText
 } from "./bridge-helpers.ts";
 
@@ -16,7 +17,7 @@ test("buildTurnUserText keeps typed text and falls back to an image prompt", () 
 	assert.equal(buildTurnUserText("", 3), "请帮我看看这几张图片。");
 });
 
-test("pickBridgeFinalText prefers final text and then falls back to streamed text or previews", () => {
+test("pickBridgeFinalText prefers final text and never promotes reasoning previews to chat content", () => {
 	assert.equal(
 		pickBridgeFinalText({
 			finalText: "最终答案",
@@ -47,7 +48,7 @@ test("pickBridgeFinalText prefers final text and then falls back to streamed tex
 			reasoningPreviews: ["这个更完整的预览答案"],
 			messageContents: ["消息"]
 		}),
-		"这个更完整的预览答案"
+		"先看一下"
 	);
 
 	assert.equal(
@@ -59,6 +60,17 @@ test("pickBridgeFinalText prefers final text and then falls back to streamed tex
 			messageContents: ["", "最后一条助手消息"]
 		}),
 		"最后一条助手消息"
+	);
+
+	assert.equal(
+		pickBridgeFinalText({
+			finalText: "",
+			streamedText: "",
+			progressTexts: [],
+			reasoningPreviews: ["不能出现在聊天气泡里的思维链"],
+			messageContents: []
+		}),
+		""
 	);
 });
 
@@ -80,6 +92,55 @@ test("composeObsidianPrompt marks the current selection as selected text", () =>
 	assert.match(prompt, /## Current note context/);
 	assert.match(prompt, /前文\nWOOP 预规划：愿望、结果、障碍、计划\n后文/);
 	assert.match(prompt, /## User request\n\n现在看到了吗/);
+});
+
+test("composeObsidianPrompt keeps a stable cache preamble before dynamic Obsidian content", () => {
+	const first = composeObsidianPrompt({
+		userText: "帮我整理",
+		contexts: [],
+		liveContext: {
+			noteTitle: "第一篇动态笔记",
+			notePath: "动态/第一篇.md",
+			selectionText: "第一段选区",
+			noteContext: "第一篇上下文"
+		}
+	});
+	const second = composeObsidianPrompt({
+		userText: "帮我整理",
+		contexts: [],
+		liveContext: {
+			noteTitle: "第二篇动态笔记",
+			notePath: "动态/第二篇.md",
+			selectionText: "第二段选区",
+			noteContext: "第二篇上下文"
+		}
+	});
+
+	const dynamicMarker = "## Dynamic Obsidian context";
+	assert.ok(first.includes(dynamicMarker));
+	assert.equal(first.slice(0, first.indexOf(dynamicMarker)), second.slice(0, second.indexOf(dynamicMarker)));
+	assert.ok(first.indexOf("第一篇动态笔记") > first.indexOf(dynamicMarker));
+	assert.ok(second.indexOf("第二篇动态笔记") > second.indexOf(dynamicMarker));
+});
+
+test("composeObsidianPrompt clamps oversized Obsidian context deterministically", () => {
+	const longContext = [
+		"BEGIN-STABLE",
+		...Array.from({ length: 220 }, (_, index) => `middle line ${index}`),
+		"END-STABLE"
+	].join("\n");
+	const prompt = composeObsidianPrompt({
+		userText: "总结这段",
+		contexts: [{ label: "当前文章", content: longContext }],
+		liveContext: {
+			noteContext: longContext
+		}
+	});
+
+	assert.match(prompt, /BEGIN-STABLE/);
+	assert.match(prompt, /END-STABLE/);
+	assert.match(prompt, /\[omitted \d+ chars for cache-friendly context clamp\]/);
+	assert.doesNotMatch(prompt, /middle line 109/);
 });
 
 test("buildReplayUserContent keeps a compact memory of attached note context and images", () => {
@@ -108,6 +169,26 @@ test("buildReplayUserContent keeps a compact memory of attached note context and
 	assert.match(replay, /Manual attachment - 手动添加文章:/);
 	assert.match(replay, /正念训练能提高注意力稳定性/);
 	assert.match(replay, /Attached images: mindfulness-1\.png, mindfulness-2\.png/);
+});
+
+test("buildReplayUserContent clamps oversized remembered Obsidian context", () => {
+	const longContext = [
+		"HISTORY-BEGIN",
+		...Array.from({ length: 220 }, (_, index) => `history middle line ${index}`),
+		"HISTORY-END"
+	].join("\n");
+	const replay = buildReplayUserContent({
+		userText: "继续处理",
+		contexts: [{ label: "当前文章", content: longContext }],
+		liveContext: {
+			noteContext: longContext
+		}
+	});
+
+	assert.match(replay, /HISTORY-BEGIN/);
+	assert.match(replay, /HISTORY-END/);
+	assert.match(replay, /\[omitted \d+ chars for cache-friendly context clamp\]/);
+	assert.doesNotMatch(replay, /history middle line 109/);
 });
 
 test("buildReplayAssistantContent keeps final text and a concise work recap", () => {
@@ -140,4 +221,23 @@ test("buildHermesInterimGuidance nudges Hermes toward real mid-turn commentary o
 	assert.match(guidance, /For multi-step, tool-using, or longer tasks, proactively send 1-3 brief interim assistant messages/);
 	assert.match(guidance, /Skip interim updates for very short tasks where they would feel noisy/);
 	assert.match(guidance, /Do not reveal chain-of-thought/);
+});
+
+test("looksLikeInternalReasoningText catches tool-planning chatter without hiding normal answers", () => {
+	assert.equal(
+		looksLikeInternalReasoningText(
+			[
+				"不过，子代理不能读本地文件系统，必须用 file 工具。",
+				"让我看看子代理可以用的 toolsets。",
+				"好，让我先直接处理英语链接，零链接笔记我自己来补。",
+				"接下来我会先用 execute_code 再重新扫描。"
+			].join("\n")
+		),
+		true
+	);
+
+	assert.equal(
+		looksLikeInternalReasoningText("我已经整理好了链接：复盘日志不需要补链接，正念相关笔记已经互相连接。"),
+		false
+	);
 });

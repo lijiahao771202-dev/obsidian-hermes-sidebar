@@ -38,8 +38,53 @@ export interface HermesRuntimePromptInput {
 	reasoningEffort?: string;
 }
 
+const OBSIDIAN_CONTEXT_PREAMBLE = [
+	"Use the following Obsidian context only for this turn.",
+	"Stable schema:",
+	"- Current open note gives the active note title and vault path when available.",
+	"- User highlighted selection is exact selected text; prioritize it over nearby context.",
+	"- Current note context is a nearby window from the open note.",
+	"- Manual attachments are explicit note or selection attachments added by the user.",
+	"Answer the user request at the end. Do not invent vault files, note titles, or wiki links."
+].join("\n");
+const OBSIDIAN_CONTEXT_CLAMP_MAX_CHARACTERS = 2400;
+const OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS = 1400;
+const OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS = 800;
+
 function normalizeText(text?: string): string {
 	return typeof text === "string" ? text.trim() : "";
+}
+
+export function looksLikeInternalReasoningText(text?: string): boolean {
+	const value = normalizeText(text);
+	if (!value) {
+		return false;
+	}
+	const lower = value.toLowerCase();
+	const markers = [
+		"必须用 file 工具",
+		"没有 file toolset",
+		"让我看看子代理",
+		"我可以给子代理",
+		"让我先直接处理",
+		"让我重新扫描",
+		"chain-of-thought",
+		"hidden reasoning"
+	];
+
+	if (markers.some((marker) => lower.includes(marker.toLowerCase()))) {
+		return true;
+	}
+
+	const planningLines = value.split(/\n+/).filter((line) => line.trim());
+	const firstPersonPlanningCount = planningLines.filter((line) =>
+		/(^|[，。；\s])(我先|我再|我会|让我|接下来|先|然后|同时)/.test(line)
+	).length;
+	const toolReferenceCount = planningLines.filter((line) =>
+		/(tool|工具|toolset|read_file|write_file|execute_code|terminal|file)/i.test(line)
+	).length;
+
+	return planningLines.length >= 3 && firstPersonPlanningCount >= 2 && toolReferenceCount >= 1;
 }
 
 export function buildHermesInterimGuidance(runtime?: HermesRuntimePromptInput): string {
@@ -78,7 +123,6 @@ export function pickBridgeFinalText(input: PickBridgeFinalTextInput): string {
 	const candidates = [
 		normalizeText(input.finalText),
 		normalizeText(input.streamedText),
-		...dedupeNormalized(input.reasoningPreviews),
 		...dedupeNormalized(input.progressTexts),
 		...dedupeNormalized(input.messageContents)
 	];
@@ -120,7 +164,7 @@ export function composeObsidianPrompt(input: ComposeObsidianPromptInput): string
 				"## Current note context",
 				"The following text is a nearby context window from the open note. Use it together with the highlighted selection.",
 				"```text",
-				liveContext.noteContext,
+				clampCacheFriendlyContext(liveContext.noteContext),
 				"```"
 			].join("\n")
 		);
@@ -130,9 +174,17 @@ export function composeObsidianPrompt(input: ComposeObsidianPromptInput): string
 		return input.userText;
 	}
 
-	const contextBlocks = input.contexts.map((context) => `## ${context.label}\n${context.content}`).join("\n\n");
+	const contextBlocks = input.contexts
+		.map((context) => {
+			const label = normalizeText(context.label) || "Manual attachment";
+			const content = clampCacheFriendlyContext(context.content);
+			return content ? `## ${label}\n${content}` : "";
+		})
+		.filter(Boolean)
+		.join("\n\n");
 	return [
-		"The following Obsidian context is attached for this turn.",
+		OBSIDIAN_CONTEXT_PREAMBLE,
+		"## Dynamic Obsidian context",
 		...liveBlocks,
 		contextBlocks,
 		"## User request",
@@ -175,7 +227,7 @@ export function buildReplayUserContent(input: ReplayUserContentInput): string {
 		sections.push(
 			[
 				"Nearby note context attached:",
-				liveContext.noteContext.trim()
+				clampCacheFriendlyContext(liveContext.noteContext)
 			].join("\n")
 		);
 	}
@@ -186,7 +238,7 @@ export function buildReplayUserContent(input: ReplayUserContentInput): string {
 		if (!content) {
 			continue;
 		}
-		sections.push(`Manual attachment - ${label}:\n${content}`);
+		sections.push(`Manual attachment - ${label}:\n${clampCacheFriendlyContext(content)}`);
 	}
 
 	const imageNames = (input.imageNames ?? []).map((name) => normalizeText(name)).filter(Boolean);
@@ -195,6 +247,18 @@ export function buildReplayUserContent(input: ReplayUserContentInput): string {
 	}
 
 	return sections.filter(Boolean).join("\n\n");
+}
+
+function clampCacheFriendlyContext(text?: string): string {
+	const value = normalizeText(text);
+	if (value.length <= OBSIDIAN_CONTEXT_CLAMP_MAX_CHARACTERS) {
+		return value;
+	}
+
+	const head = value.slice(0, OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS).trimEnd();
+	const tail = value.slice(value.length - OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS).trimStart();
+	const omitted = Math.max(0, value.length - OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS - OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS);
+	return [head, `[omitted ${omitted} chars for cache-friendly context clamp]`, tail].join("\n\n");
 }
 
 export function buildReplayAssistantContent(input: ReplayAssistantContentInput): string {

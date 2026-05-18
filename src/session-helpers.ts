@@ -6,6 +6,23 @@ export interface SessionLike {
 	updatedAt: number;
 }
 
+export interface SessionSnapshotLike<Message = unknown> extends SessionLike {
+	title: string;
+	sessionId?: string;
+	messages: Message[];
+}
+
+export interface SessionSnapshotInput<Message = unknown> {
+	title?: string;
+	messages: Message[];
+	sessionId?: string;
+}
+
+export interface BridgeUsageSummaryLike {
+	apiCalls?: number;
+	cacheHitRate?: number | null;
+}
+
 export interface SelectionSourceInput {
 	mode?: string | null;
 	editorSelection?: string | null;
@@ -143,6 +160,33 @@ export function pickNextActiveSessionId(
 		(left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt
 	);
 	return sorted.length > 0 ? sorted[0].id : undefined;
+}
+
+export function applySessionSnapshot<Message>(
+	session: SessionSnapshotLike<Message>,
+	input: SessionSnapshotInput<Message>,
+	touch: boolean,
+	now: number
+): SessionSnapshotLike<Message> {
+	session.title = input.title?.trim() || session.title || DEFAULT_SESSION_TITLE;
+	session.sessionId = input.sessionId;
+	session.messages = input.messages;
+	if (touch) {
+		session.updatedAt = now;
+	}
+	return session;
+}
+
+export function formatBridgeConnectionStatus(
+	sessionId?: string,
+	usage?: BridgeUsageSummaryLike
+): string {
+	const sessionLabel = sessionId ? `已连接 ${formatSelectionPreview(sessionId, 24)}` : "已收到回复";
+	if (!usage || typeof usage.cacheHitRate !== "number") {
+		return sessionLabel;
+	}
+	const calls = typeof usage.apiCalls === "number" && usage.apiCalls > 0 ? ` · ${usage.apiCalls} calls` : "";
+	return `${sessionLabel} · cache ${usage.cacheHitRate}%${calls}`;
 }
 
 export function pickSelectionText(input: SelectionSourceInput): string {

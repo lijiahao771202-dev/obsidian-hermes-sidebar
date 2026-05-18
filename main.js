@@ -81,6 +81,23 @@ function pickNextActiveSessionId(sessions, preferredId) {
   );
   return sorted.length > 0 ? sorted[0].id : void 0;
 }
+function applySessionSnapshot(session, input, touch, now) {
+  session.title = input.title?.trim() || session.title || DEFAULT_SESSION_TITLE;
+  session.sessionId = input.sessionId;
+  session.messages = input.messages;
+  if (touch) {
+    session.updatedAt = now;
+  }
+  return session;
+}
+function formatBridgeConnectionStatus(sessionId, usage) {
+  const sessionLabel = sessionId ? `\u5DF2\u8FDE\u63A5 ${formatSelectionPreview(sessionId, 24)}` : "\u5DF2\u6536\u5230\u56DE\u590D";
+  if (!usage || typeof usage.cacheHitRate !== "number") {
+    return sessionLabel;
+  }
+  const calls = typeof usage.apiCalls === "number" && usage.apiCalls > 0 ? ` \xB7 ${usage.apiCalls} calls` : "";
+  return `${sessionLabel} \xB7 cache ${usage.cacheHitRate}%${calls}`;
+}
 function pickSelectionText(input) {
   const mode = (input.mode || "").trim().toLowerCase();
   const editorSelection = (input.editorSelection || "").trim();
@@ -225,8 +242,48 @@ function shouldRefreshSelectionSnapshot(input) {
 }
 
 // src/bridge-helpers.ts
+var OBSIDIAN_CONTEXT_PREAMBLE = [
+  "Use the following Obsidian context only for this turn.",
+  "Stable schema:",
+  "- Current open note gives the active note title and vault path when available.",
+  "- User highlighted selection is exact selected text; prioritize it over nearby context.",
+  "- Current note context is a nearby window from the open note.",
+  "- Manual attachments are explicit note or selection attachments added by the user.",
+  "Answer the user request at the end. Do not invent vault files, note titles, or wiki links."
+].join("\n");
+var OBSIDIAN_CONTEXT_CLAMP_MAX_CHARACTERS = 2400;
+var OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS = 1400;
+var OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS = 800;
 function normalizeText(text) {
   return typeof text === "string" ? text.trim() : "";
+}
+function looksLikeInternalReasoningText(text) {
+  const value = normalizeText(text);
+  if (!value) {
+    return false;
+  }
+  const lower = value.toLowerCase();
+  const markers = [
+    "\u5FC5\u987B\u7528 file \u5DE5\u5177",
+    "\u6CA1\u6709 file toolset",
+    "\u8BA9\u6211\u770B\u770B\u5B50\u4EE3\u7406",
+    "\u6211\u53EF\u4EE5\u7ED9\u5B50\u4EE3\u7406",
+    "\u8BA9\u6211\u5148\u76F4\u63A5\u5904\u7406",
+    "\u8BA9\u6211\u91CD\u65B0\u626B\u63CF",
+    "chain-of-thought",
+    "hidden reasoning"
+  ];
+  if (markers.some((marker) => lower.includes(marker.toLowerCase()))) {
+    return true;
+  }
+  const planningLines = value.split(/\n+/).filter((line) => line.trim());
+  const firstPersonPlanningCount = planningLines.filter(
+    (line) => /(^|[，。；\s])(我先|我再|我会|让我|接下来|先|然后|同时)/.test(line)
+  ).length;
+  const toolReferenceCount = planningLines.filter(
+    (line) => /(tool|工具|toolset|read_file|write_file|execute_code|terminal|file)/i.test(line)
+  ).length;
+  return planningLines.length >= 3 && firstPersonPlanningCount >= 2 && toolReferenceCount >= 1;
 }
 function buildHermesInterimGuidance(runtime) {
   const runtimeProvider = normalizeText(runtime?.provider) || "unknown";
@@ -286,7 +343,7 @@ function composeObsidianPrompt(input) {
         "## Current note context",
         "The following text is a nearby context window from the open note. Use it together with the highlighted selection.",
         "```text",
-        liveContext.noteContext,
+        clampCacheFriendlyContext(liveContext.noteContext),
         "```"
       ].join("\n")
     );
@@ -294,10 +351,15 @@ function composeObsidianPrompt(input) {
   if (input.contexts.length === 0 && liveBlocks.length === 0) {
     return input.userText;
   }
-  const contextBlocks = input.contexts.map((context) => `## ${context.label}
-${context.content}`).join("\n\n");
+  const contextBlocks = input.contexts.map((context) => {
+    const label = normalizeText(context.label) || "Manual attachment";
+    const content = clampCacheFriendlyContext(context.content);
+    return content ? `## ${label}
+${content}` : "";
+  }).filter(Boolean).join("\n\n");
   return [
-    "The following Obsidian context is attached for this turn.",
+    OBSIDIAN_CONTEXT_PREAMBLE,
+    "## Dynamic Obsidian context",
     ...liveBlocks,
     contextBlocks,
     "## User request",
@@ -333,7 +395,7 @@ ${userText}`);
     sections.push(
       [
         "Nearby note context attached:",
-        liveContext.noteContext.trim()
+        clampCacheFriendlyContext(liveContext.noteContext)
       ].join("\n")
     );
   }
@@ -344,13 +406,23 @@ ${userText}`);
       continue;
     }
     sections.push(`Manual attachment - ${label}:
-${content}`);
+${clampCacheFriendlyContext(content)}`);
   }
   const imageNames = (input.imageNames ?? []).map((name) => normalizeText(name)).filter(Boolean);
   if (imageNames.length > 0) {
     sections.push(`Attached images: ${imageNames.join(", ")}`);
   }
   return sections.filter(Boolean).join("\n\n");
+}
+function clampCacheFriendlyContext(text) {
+  const value = normalizeText(text);
+  if (value.length <= OBSIDIAN_CONTEXT_CLAMP_MAX_CHARACTERS) {
+    return value;
+  }
+  const head = value.slice(0, OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS).trimEnd();
+  const tail = value.slice(value.length - OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS).trimStart();
+  const omitted = Math.max(0, value.length - OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS - OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS);
+  return [head, `[omitted ${omitted} chars for cache-friendly context clamp]`, tail].join("\n\n");
 }
 function buildReplayAssistantContent(input) {
   const sections = [];
@@ -2467,13 +2539,7 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
       return;
     }
     const current = this.chatSessions[index];
-    this.chatSessions[index] = {
-      ...current,
-      title: input.title?.trim() || current.title || DEFAULT_SESSION_TITLE,
-      sessionId: input.sessionId,
-      messages: input.messages,
-      updatedAt: touch ? Date.now() : current.updatedAt
-    };
+    applySessionSnapshot(current, input, touch, Date.now());
     void this.savePluginState();
   }
   async savePluginState() {
@@ -3605,6 +3671,16 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     if (!text) {
       return;
     }
+    if (looksLikeInternalReasoningText(text)) {
+      this.pushActivityEntry({
+        type: "activity",
+        eventType: "_thinking",
+        status: "running",
+        toolName: "thinking",
+        preview: text
+      });
+      return;
+    }
     const session = this.plugin.getActiveSession();
     const insertIndex = getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
     const previousMessage = insertIndex > 0 ? session.messages[insertIndex - 1] : void 0;
@@ -3810,13 +3886,41 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.refreshActivityMessage(target);
   }
   refreshActivityMessage(target) {
-    this.activityMessageRef = void 0;
-    this.activityRowEl = void 0;
-    this.activityBubbleEl = void 0;
-    this.activityTimelineEl = void 0;
-    this.render(false);
+    const refreshed = this.rerenderActivityMessage(target);
+    if (!refreshed) {
+      this.activityMessageRef = void 0;
+      this.activityRowEl = void 0;
+      this.activityBubbleEl = void 0;
+      this.activityTimelineEl = void 0;
+      this.render(false);
+    }
     this.persistActiveSession(false);
     this.scheduleMessagesToBottom();
+  }
+  rerenderActivityMessage(target) {
+    if (target.kind !== "activity" || target.role !== "assistant") {
+      return false;
+    }
+    let row = this.activityRowEl?.isConnected && this.activityMessageRef?.id === target.id ? this.activityRowEl : void 0;
+    if (!row && target.id) {
+      row = this.findRenderedMessageRow(target) ?? void 0;
+    }
+    if (!row) {
+      return false;
+    }
+    row.empty();
+    const rendered = this.renderMessageActivityTimeline(row, target, {
+      forceExpanded: Boolean(target.id && this.expandedActivityMessageIds.has(target.id)),
+      hideSummary: Boolean(target.id && this.expandedActivityMessageIds.has(target.id))
+    });
+    if (!rendered) {
+      return false;
+    }
+    this.activityMessageRef = target;
+    this.activityRowEl = row;
+    this.activityBubbleEl = row;
+    this.activityTimelineEl = rendered;
+    return true;
   }
   setFallbackStatus(text) {
     if (!this.statusText || !this.activityEntries.length) {
@@ -3839,6 +3943,9 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       return toolName ? joinActivityText(formatToolStatusText(toolName, "error"), preview) : joinActivityText("\u5DE5\u5177\u8C03\u7528\u5931\u8D25", preview);
     }
     return event.text?.trim() || event.message?.trim() || "";
+  }
+  formatConnectionStatus(sessionId, usage) {
+    return formatBridgeConnectionStatus(sessionId, usage);
   }
   ensureStreamingFinalMessage() {
     const session = this.plugin.getActiveSession();
@@ -3867,6 +3974,20 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     if (this.activeStreamingMessageIndex !== null) {
       const target = session.messages[this.activeStreamingMessageIndex];
       if (target?.kind === "final" && target.content.trim()) {
+        if (looksLikeInternalReasoningText(target.content)) {
+          this.pushActivityEntry({
+            type: "activity",
+            eventType: "_thinking",
+            status: "running",
+            toolName: "thinking",
+            preview: target.content
+          });
+          session.messages.splice(this.activeStreamingMessageIndex, 1);
+          this.activeStreamingMessageIndex = null;
+          this.persistActiveSession(false);
+          this.render(false);
+          return;
+        }
         target.pending = false;
         this.cancelPendingStreamingRender();
         if (this.streamingBodyEl?.isConnected) {
@@ -3883,6 +4004,18 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
   }
   finalizeActiveStream(finalText) {
     const session = this.plugin.getActiveSession();
+    const normalizedFinalText = finalText?.trim() ?? "";
+    if (normalizedFinalText && looksLikeInternalReasoningText(normalizedFinalText)) {
+      this.convertActiveStreamToProgress();
+      this.pushActivityEntry({
+        type: "activity",
+        eventType: "_thinking",
+        status: "done",
+        toolName: "thinking",
+        preview: normalizedFinalText
+      });
+      return;
+    }
     if (this.activeStreamingMessageIndex === null) {
       const content = finalText?.trim() || "(Hermes returned an empty response.)";
       const message = {
@@ -4119,7 +4252,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
             this.settleInlineActivityTimeline();
             this.activeStreamingMessageIndex = null;
             hasFinalized = true;
-            this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
+            this.statusText = this.formatConnectionStatus(session.sessionId, event.usage);
             this.scheduleMessagesToBottom();
           }
         }
@@ -4136,7 +4269,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
         hasFinalized = true;
       }
       this.persistActiveSession();
-      this.statusText = session.sessionId ? "\u5DF2\u8FDE\u63A5" : "\u5DF2\u6536\u5230\u56DE\u590D";
+      this.statusText = this.formatConnectionStatus(session.sessionId, result.usage);
     } catch (error) {
       if (isHermesAbortError(error)) {
         this.convertActiveStreamToProgress();
@@ -4383,6 +4516,7 @@ function runHermesBridge(input) {
         finalResult = {
           text: event.text || "",
           sessionId: event.sessionId ?? input.sessionId,
+          usage: event.usage,
           rawOutput: cleanOutputForDisplay(stderrBuffer)
         };
       }

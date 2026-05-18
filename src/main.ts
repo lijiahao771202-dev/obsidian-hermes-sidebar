@@ -18,8 +18,10 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import {
 	DEFAULT_SESSION_TITLE,
+	applySessionSnapshot,
 	adjustIndexAfterInsertion,
 	buildSessionTitle,
+	formatBridgeConnectionStatus,
 	canUpdateBridgeEventWithoutFullRender,
 	formatActivityTimelineSummary,
 	getActivityChainTailVisibleCount,
@@ -45,7 +47,8 @@ import {
 	buildHermesInterimGuidance,
 	buildReplayUserContent,
 	buildTurnUserText,
-	composeObsidianPrompt
+	composeObsidianPrompt,
+	looksLikeInternalReasoningText
 } from "./bridge-helpers";
 import { buildSelectionContextWindow } from "./inline-edit-helpers";
 import { InlineEditManager, type InlineEditRunInput } from "./inline-edit";
@@ -168,7 +171,16 @@ interface LiveContextInfo {
 interface HermesRunResult {
 	text: string;
 	sessionId?: string;
+	usage?: HermesUsageSummary;
 	rawOutput: string;
+}
+
+interface HermesUsageSummary {
+	apiCalls?: number;
+	inputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+	cacheHitRate?: number | null;
 }
 
 interface HermesBridgePayload {
@@ -187,6 +199,7 @@ interface HermesBridgeEvent {
 	text?: string;
 	message?: string;
 	sessionId?: string;
+	usage?: HermesUsageSummary;
 	eventType?: string;
 	toolName?: string;
 	preview?: string;
@@ -607,13 +620,7 @@ class HermesSidebarPlugin extends Plugin {
 		}
 
 		const current = this.chatSessions[index];
-		this.chatSessions[index] = {
-			...current,
-			title: input.title?.trim() || current.title || DEFAULT_SESSION_TITLE,
-			sessionId: input.sessionId,
-			messages: input.messages,
-			updatedAt: touch ? Date.now() : current.updatedAt
-		};
+		applySessionSnapshot(current, input, touch, Date.now());
 		void this.savePluginState();
 	}
 
@@ -1919,6 +1926,16 @@ class HermesSidebarView extends ItemView {
 		if (!text) {
 			return;
 		}
+		if (looksLikeInternalReasoningText(text)) {
+			this.pushActivityEntry({
+				type: "activity",
+				eventType: "_thinking",
+				status: "running",
+				toolName: "thinking",
+				preview: text
+			});
+			return;
+		}
 
 		const session = this.plugin.getActiveSession();
 		const insertIndex = getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
@@ -2177,13 +2194,45 @@ class HermesSidebarView extends ItemView {
 	}
 
 	private refreshActivityMessage(target: HermesMessage): void {
-		this.activityMessageRef = undefined;
-		this.activityRowEl = undefined;
-		this.activityBubbleEl = undefined;
-		this.activityTimelineEl = undefined;
-		this.render(false);
+		const refreshed = this.rerenderActivityMessage(target);
+		if (!refreshed) {
+			this.activityMessageRef = undefined;
+			this.activityRowEl = undefined;
+			this.activityBubbleEl = undefined;
+			this.activityTimelineEl = undefined;
+			this.render(false);
+		}
 		this.persistActiveSession(false);
 		this.scheduleMessagesToBottom();
+	}
+
+	private rerenderActivityMessage(target: HermesMessage): boolean {
+		if (target.kind !== "activity" || target.role !== "assistant") {
+			return false;
+		}
+
+		let row = this.activityRowEl?.isConnected && this.activityMessageRef?.id === target.id ? this.activityRowEl : undefined;
+		if (!row && target.id) {
+			row = this.findRenderedMessageRow(target) ?? undefined;
+		}
+		if (!row) {
+			return false;
+		}
+
+		row.empty();
+		const rendered = this.renderMessageActivityTimeline(row, target, {
+			forceExpanded: Boolean(target.id && this.expandedActivityMessageIds.has(target.id)),
+			hideSummary: Boolean(target.id && this.expandedActivityMessageIds.has(target.id))
+		});
+		if (!rendered) {
+			return false;
+		}
+
+		this.activityMessageRef = target;
+		this.activityRowEl = row;
+		this.activityBubbleEl = row;
+		this.activityTimelineEl = rendered;
+		return true;
 	}
 
 	private setFallbackStatus(text: string): void {
@@ -2216,6 +2265,10 @@ class HermesSidebarView extends ItemView {
 		return event.text?.trim() || event.message?.trim() || "";
 	}
 
+	private formatConnectionStatus(sessionId?: string, usage?: HermesUsageSummary): string {
+		return formatBridgeConnectionStatus(sessionId, usage);
+	}
+
 	private ensureStreamingFinalMessage(): HermesMessage {
 		const session = this.plugin.getActiveSession();
 		if (this.activeStreamingMessageIndex !== null) {
@@ -2245,6 +2298,20 @@ class HermesSidebarView extends ItemView {
 		if (this.activeStreamingMessageIndex !== null) {
 			const target = session.messages[this.activeStreamingMessageIndex];
 			if (target?.kind === "final" && target.content.trim()) {
+				if (looksLikeInternalReasoningText(target.content)) {
+					this.pushActivityEntry({
+						type: "activity",
+						eventType: "_thinking",
+						status: "running",
+						toolName: "thinking",
+						preview: target.content
+					});
+					session.messages.splice(this.activeStreamingMessageIndex, 1);
+					this.activeStreamingMessageIndex = null;
+					this.persistActiveSession(false);
+					this.render(false);
+					return;
+				}
 				target.pending = false;
 				this.cancelPendingStreamingRender();
 				if (this.streamingBodyEl?.isConnected) {
@@ -2262,6 +2329,18 @@ class HermesSidebarView extends ItemView {
 
 	private finalizeActiveStream(finalText?: string): void {
 		const session = this.plugin.getActiveSession();
+		const normalizedFinalText = finalText?.trim() ?? "";
+		if (normalizedFinalText && looksLikeInternalReasoningText(normalizedFinalText)) {
+			this.convertActiveStreamToProgress();
+			this.pushActivityEntry({
+				type: "activity",
+				eventType: "_thinking",
+				status: "done",
+				toolName: "thinking",
+				preview: normalizedFinalText
+			});
+			return;
+		}
 		if (this.activeStreamingMessageIndex === null) {
 			const content = finalText?.trim() || "(Hermes returned an empty response.)";
 			const message: HermesMessage = {
@@ -2522,7 +2601,7 @@ class HermesSidebarView extends ItemView {
 						this.settleInlineActivityTimeline();
 						this.activeStreamingMessageIndex = null;
 						hasFinalized = true;
-						this.statusText = session.sessionId ? "已连接" : "已收到回复";
+						this.statusText = this.formatConnectionStatus(session.sessionId, event.usage);
 						this.scheduleMessagesToBottom();
 					}
 				}
@@ -2541,7 +2620,7 @@ class HermesSidebarView extends ItemView {
 				hasFinalized = true;
 			}
 			this.persistActiveSession();
-			this.statusText = session.sessionId ? "已连接" : "已收到回复";
+			this.statusText = this.formatConnectionStatus(session.sessionId, result.usage);
 		} catch (error) {
 			if (isHermesAbortError(error)) {
 				this.convertActiveStreamToProgress();
@@ -2868,6 +2947,7 @@ function runHermesBridge(input: {
 				finalResult = {
 					text: event.text || "",
 					sessionId: event.sessionId ?? input.sessionId,
+					usage: event.usage,
 					rawOutput: cleanOutputForDisplay(stderrBuffer)
 				};
 			}

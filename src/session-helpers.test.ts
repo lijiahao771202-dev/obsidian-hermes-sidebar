@@ -4,7 +4,9 @@ import { test } from "node:test";
 import {
 	DEFAULT_SESSION_TITLE,
 	adjustIndexAfterInsertion,
+	applySessionSnapshot,
 	buildSessionTitle,
+	formatBridgeConnectionStatus,
 	getAppendIndexAfterTurnMessages,
 	shouldRefreshSelectionSnapshot,
 	formatSelectionPreview,
@@ -61,6 +63,46 @@ test("pickNextActiveSessionId keeps the preferred session when possible and othe
 	assert.equal(pickNextActiveSessionId(sessions, "newer"), "newer");
 	assert.equal(pickNextActiveSessionId(sessions, "missing"), "latest");
 	assert.equal(pickNextActiveSessionId([], "missing"), undefined);
+});
+
+test("applySessionSnapshot updates the same session object so active turn references keep sessionId", () => {
+	const messages = [{ id: "user-1" }];
+	const session = {
+		id: "session-1",
+		title: DEFAULT_SESSION_TITLE,
+		createdAt: 10,
+		updatedAt: 20,
+		messages: [] as Array<{ id: string }>,
+		sessionId: undefined as string | undefined
+	};
+
+	const returned = applySessionSnapshot(
+		session,
+		{
+			title: "  缓存追踪  ",
+			messages,
+			sessionId: "20260518_123000_abc123"
+		},
+		true,
+		30
+	);
+
+	assert.equal(returned, session);
+	assert.equal(session.title, "缓存追踪");
+	assert.equal(session.sessionId, "20260518_123000_abc123");
+	assert.equal(session.messages, messages);
+	assert.equal(session.updatedAt, 30);
+});
+
+test("formatBridgeConnectionStatus shows Hermes session id and cache usage when available", () => {
+	assert.equal(
+		formatBridgeConnectionStatus("20260518_123000_abc123", {
+			apiCalls: 2,
+			cacheHitRate: 87
+		}),
+		"已连接 20260518_123000_abc123 · cache 87% · 2 calls"
+	);
+	assert.equal(formatBridgeConnectionStatus(undefined, undefined), "已收到回复");
 });
 
 test("pickSelectionText prefers browser selection in preview mode and editor selection in source mode", () => {

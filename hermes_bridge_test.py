@@ -7,6 +7,7 @@ import unittest
 from hermes_bridge import (
     apply_runtime_reasoning_to_api_kwargs,
     append_reasoning_delta_preview,
+    build_usage_summary,
     compact_preview,
     extract_new_reasoning_delta,
     format_tool_status,
@@ -157,7 +158,7 @@ class HermesBridgeHelpersTest(unittest.TestCase):
                 reasoning_previews=["更完整的预览"],
                 message_contents=["消息"],
             ),
-            "更完整的预览",
+            "先看看",
         )
 
         self.assertEqual(
@@ -169,6 +170,38 @@ class HermesBridgeHelpersTest(unittest.TestCase):
                 message_contents=["", "最后一条消息"],
             ),
             "最后一条消息",
+        )
+
+    def test_build_usage_summary_reports_cache_ratio(self):
+        self.assertEqual(
+            build_usage_summary({
+                "api_calls": 3,
+                "input_tokens": 10000,
+                "cache_read_tokens": 7600,
+                "cache_write_tokens": 500,
+            }),
+            {
+                "apiCalls": 3,
+                "inputTokens": 10000,
+                "cacheReadTokens": 7600,
+                "cacheWriteTokens": 500,
+                "cacheHitRate": 76,
+            },
+        )
+
+        self.assertEqual(
+            build_usage_summary({
+                "api_calls": 1,
+                "input_tokens": 0,
+                "cache_read_tokens": 0,
+            }),
+            {
+                "apiCalls": 1,
+                "inputTokens": 0,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0,
+                "cacheHitRate": None,
+            },
         )
 
     def test_preprocess_bridge_images_enriches_prompt_with_analysis(self):

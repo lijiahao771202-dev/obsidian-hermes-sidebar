@@ -261,7 +261,6 @@ def pick_bridge_final_text(
     seen: set[str] = set()
     for group in (
         [final_text or "", streamed_text or ""],
-        reasoning_previews or [],
         progress_texts or [],
         message_contents or [],
     ):
@@ -272,6 +271,18 @@ def pick_bridge_final_text(
             seen.add(text)
             candidates.append(text)
     return candidates[0] if candidates else ""
+
+
+def build_usage_summary(result: dict[str, Any]) -> dict[str, int | None]:
+    input_tokens = int(result.get("input_tokens") or 0)
+    cache_read_tokens = int(result.get("cache_read_tokens") or 0)
+    return {
+        "apiCalls": int(result.get("api_calls") or 0),
+        "inputTokens": input_tokens,
+        "cacheReadTokens": cache_read_tokens,
+        "cacheWriteTokens": int(result.get("cache_write_tokens") or 0),
+        "cacheHitRate": round((cache_read_tokens / input_tokens) * 100) if input_tokens > 0 else None,
+    }
 
 
 def preprocess_bridge_images(agent: Any, prompt: str, image_paths: list[str]) -> str:
@@ -626,6 +637,7 @@ def main() -> int:
         "type": "final",
         "text": final_text,
         "sessionId": agent.session_id,
+        "usage": build_usage_summary(result),
     })
     return 0
 
