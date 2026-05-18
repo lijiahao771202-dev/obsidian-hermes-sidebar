@@ -5,9 +5,12 @@ import {
 	DEFAULT_SESSION_TITLE,
 	adjustIndexAfterInsertion,
 	applySessionSnapshot,
+	buildContextHealthItems,
 	buildSessionTitle,
 	formatBridgeConnectionStatus,
+	getContextModeDescription,
 	getAppendIndexAfterTurnMessages,
+	pickLiveContextForMode,
 	shouldRefreshSelectionSnapshot,
 	formatSelectionPreview,
 	getInsertIndexAfterMessage,
@@ -103,6 +106,55 @@ test("formatBridgeConnectionStatus shows Hermes session id and cache usage when 
 		"已连接 20260518_123000_abc123 · cache 87% · 2 calls"
 	);
 	assert.equal(formatBridgeConnectionStatus(undefined, undefined), "已收到回复");
+});
+
+test("pickLiveContextForMode applies explicit Obsidian context modes", () => {
+	const liveContext = {
+		noteTitle: "正念练习",
+		notePath: "心理学/正念练习.md",
+		selectionText: "观察念头，不追随。",
+		noteContext: "前文\n观察念头，不追随。\n后文"
+	};
+
+	assert.deepEqual(pickLiveContextForMode(liveContext, "selection"), {
+		noteTitle: "正念练习",
+		notePath: "心理学/正念练习.md",
+		selectionText: "观察念头，不追随。",
+		noteContext: "前文\n观察念头，不追随。\n后文"
+	});
+	assert.deepEqual(pickLiveContextForMode(liveContext, "note"), {
+		noteTitle: "正念练习",
+		notePath: "心理学/正念练习.md"
+	});
+	assert.deepEqual(pickLiveContextForMode(liveContext, "manual"), {});
+	assert.equal(getContextModeDescription("auto"), "自动");
+});
+
+test("buildContextHealthItems summarizes session, cache, and pending context state", () => {
+	assert.deepEqual(
+		buildContextHealthItems({
+			sessionId: "20260518_123000_abcdef",
+			contextMode: "selection",
+			pendingContextCount: 2,
+			pendingImageCount: 1,
+			queueCount: 3,
+			liveContext: {
+				noteTitle: "正念练习",
+				selectionText: "观察念头，不追随。",
+				noteContext: "前文\n观察念头，不追随。\n后文"
+			},
+			usage: {
+				apiCalls: 2,
+				cacheHitRate: 87
+			}
+		}),
+		[
+			{ label: "Session", value: "20260518_123000_abcdef" },
+			{ label: "Cache", value: "87% · 2 calls" },
+			{ label: "Context", value: "选区优先 · 正念练习 · 选区 9 字 · 附近上下文 15 字" },
+			{ label: "Pending", value: "2 段上下文 · 1 张图片 · 3 条排队" }
+		]
+	);
 });
 
 test("pickSelectionText prefers browser selection in preview mode and editor selection in source mode", () => {

@@ -1,12 +1,15 @@
 import json
+import os
 import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
 
 from hermes_bridge import (
     apply_runtime_reasoning_to_api_kwargs,
     append_reasoning_delta_preview,
+    build_write_review_request,
     build_usage_summary,
     compact_preview,
     extract_new_reasoning_delta,
@@ -203,6 +206,83 @@ class HermesBridgeHelpersTest(unittest.TestCase):
                 "cacheHitRate": None,
             },
         )
+
+    def test_build_write_review_request_for_write_file_returns_unified_diff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "note.md"
+            path.write_text("旧标题\n第二行\n", encoding="utf-8")
+
+            review = build_write_review_request(
+                "write_file",
+                {
+                    "path": str(path),
+                    "content": "新标题\n第二行\n"
+                },
+            )
+
+            self.assertIsNotNone(review)
+            self.assertEqual(review["toolName"], "write_file")
+            self.assertEqual(review["filePath"], str(path))
+            self.assertIn("--- a/", review["diff"])
+            self.assertIn("+++ b/", review["diff"])
+            self.assertIn("-旧标题", review["diff"])
+            self.assertIn("+新标题", review["diff"])
+
+    def test_build_write_review_request_for_patch_replace_returns_unified_diff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "note.md"
+            path.write_text("第一段\n旧句子\n尾声\n", encoding="utf-8")
+
+            review = build_write_review_request(
+                "patch",
+                {
+                    "mode": "replace",
+                    "path": str(path),
+                    "old_string": "旧句子",
+                    "new_string": "新句子"
+                },
+            )
+
+            self.assertIsNotNone(review)
+            self.assertEqual(review["toolName"], "patch")
+            self.assertEqual(review["filePath"], str(path))
+            self.assertIn("-旧句子", review["diff"])
+            self.assertIn("+新句子", review["diff"])
+
+    def test_build_write_review_request_for_v4a_patch_returns_combined_diff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "draft.md"
+            path.write_text("Alpha\nBeta\n", encoding="utf-8")
+            created_path = Path(temp_dir) / "new.md"
+            patch = "\n".join(
+                [
+                    "*** Begin Patch",
+                    f"*** Update File: {path}",
+                    "@@",
+                    " Alpha",
+                    "-Beta",
+                    "+Gamma",
+                    f"*** Add File: {created_path}",
+                    "+Fresh line",
+                    "*** End Patch",
+                ]
+            )
+
+            review = build_write_review_request(
+                "patch",
+                {
+                    "mode": "patch",
+                    "patch": patch
+                },
+            )
+
+            self.assertIsNotNone(review)
+            self.assertEqual(review["toolName"], "patch")
+            self.assertIn(str(path), review["filePath"])
+            self.assertIn("-Beta", review["diff"])
+            self.assertIn("+Gamma", review["diff"])
+            self.assertIn(f"+++ b/{created_path}", review["diff"])
+            self.assertIn("+Fresh line", review["diff"])
 
     def test_preprocess_bridge_images_enriches_prompt_with_analysis(self):
         previous_module = sys.modules.get("tools.vision_tools")

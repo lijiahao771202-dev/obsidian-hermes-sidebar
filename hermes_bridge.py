@@ -7,11 +7,16 @@ import os
 import sys
 import copy
 import asyncio
+import difflib
+import itertools
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 DEFAULT_HERMES_AGENT_ROOT = "/Users/lijiahao/.hermes/hermes-agent"
 DEFAULT_HERMES_HOME = str(Path.home() / ".hermes")
+WRITE_REVIEW_DIFF_MAX_CHARACTERS = 40000
+_WRITE_REVIEW_REQUEST_IDS = itertools.count(1)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -33,6 +38,295 @@ def resolve_hermes_home() -> Path:
     except Exception:
         pass
     return home
+
+
+def ensure_hermes_agent_root_on_path() -> Path:
+    hermes_agent_root = Path(os.environ.get("HERMES_AGENT_ROOT", DEFAULT_HERMES_AGENT_ROOT)).expanduser()
+    if str(hermes_agent_root) not in sys.path:
+        sys.path.insert(0, str(hermes_agent_root))
+    return hermes_agent_root
+
+
+class BridgeControlChannel:
+    def __init__(self, stream: Any):
+        self._stream = stream
+        self._responses: dict[str, bool] = {}
+        self._closed = False
+        self._condition = threading.Condition()
+        self._reader = threading.Thread(target=self._read_loop, name="hermes-bridge-control", daemon=True)
+        self._reader.start()
+
+    def _read_loop(self) -> None:
+        try:
+            while True:
+                line = self._stream.readline()
+                if not line:
+                    break
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if str(payload.get("type") or "").strip() != "write_review_response":
+                    continue
+                request_id = str(payload.get("requestId") or "").strip()
+                if not request_id:
+                    continue
+                approved = bool(payload.get("approved"))
+                with self._condition:
+                    self._responses[request_id] = approved
+                    self._condition.notify_all()
+        finally:
+            with self._condition:
+                self._closed = True
+                self._condition.notify_all()
+
+    def wait_for_write_review(self, request_id: str) -> bool:
+        with self._condition:
+            while request_id not in self._responses and not self._closed:
+                self._condition.wait(timeout=0.25)
+            if request_id in self._responses:
+                return self._responses.pop(request_id)
+            return False
+
+
+def clamp_write_review_diff(diff_text: str, *, max_length: int = WRITE_REVIEW_DIFF_MAX_CHARACTERS) -> str:
+    if len(diff_text) <= max_length:
+        return diff_text
+    head = diff_text[: max_length // 2].rstrip()
+    tail = diff_text[-max_length // 2 :].lstrip()
+    omitted = len(diff_text) - len(head) - len(tail)
+    return f"{head}\n...\n[omitted {omitted} chars from diff preview]\n...\n{tail}"
+
+
+def build_unified_diff(path_label: str, old_content: str, new_content: str) -> str:
+    return "".join(
+        difflib.unified_diff(
+            old_content.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile=f"a/{path_label}",
+            tofile=f"b/{path_label}",
+        )
+    )
+
+
+def count_diff_changes(diff_text: str) -> tuple[int, int]:
+    additions = 0
+    deletions = 0
+    for line in diff_text.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            additions += 1
+        elif line.startswith("-"):
+            deletions += 1
+    return additions, deletions
+
+
+def format_write_review_meta(*, tool_name: str, file_count: int, additions: int, deletions: int) -> str:
+    file_label = "1 file" if file_count == 1 else f"{file_count} files"
+    return f"{tool_name} · {file_label} · -{deletions} +{additions}"
+
+
+class PreviewFileOperations:
+    def __init__(self):
+        self._virtual_files: dict[str, str] = {}
+        self._missing_paths: set[str] = set()
+
+    def _expand_path(self, path: str) -> str:
+        return str(resolve_preview_target_path(path))
+
+    def read_file_raw(self, path: str) -> Any:
+        ensure_hermes_agent_root_on_path()
+        from tools.file_operations import ReadResult
+
+        resolved = self._expand_path(path)
+        if resolved in self._virtual_files:
+            return ReadResult(content=self._virtual_files[resolved], file_size=len(self._virtual_files[resolved].encode("utf-8")))
+        if resolved in self._missing_paths:
+            return ReadResult(error=f"Failed to read file: {resolved}")
+        target = Path(resolved)
+        if not target.exists():
+            self._missing_paths.add(resolved)
+            return ReadResult(error=f"Failed to read file: {resolved}")
+        content = target.read_text(encoding="utf-8")
+        self._virtual_files[resolved] = content
+        return ReadResult(content=content, file_size=len(content.encode("utf-8")))
+
+    def write_file(self, path: str, content: str) -> Any:
+        ensure_hermes_agent_root_on_path()
+        from tools.file_operations import WriteResult
+
+        resolved = self._expand_path(path)
+        self._virtual_files[resolved] = content
+        self._missing_paths.discard(resolved)
+        return WriteResult(bytes_written=len(content.encode("utf-8")))
+
+    def delete_file(self, path: str) -> Any:
+        ensure_hermes_agent_root_on_path()
+        from tools.file_operations import WriteResult
+
+        resolved = self._expand_path(path)
+        self._virtual_files.pop(resolved, None)
+        self._missing_paths.add(resolved)
+        return WriteResult()
+
+    def move_file(self, src: str, dst: str) -> Any:
+        ensure_hermes_agent_root_on_path()
+        from tools.file_operations import WriteResult
+
+        src_resolved = self._expand_path(src)
+        dst_resolved = self._expand_path(dst)
+        src_result = self.read_file_raw(src)
+        if src_result.error:
+            return WriteResult(error=src_result.error)
+        self._virtual_files[dst_resolved] = src_result.content
+        self._missing_paths.discard(dst_resolved)
+        self._virtual_files.pop(src_resolved, None)
+        self._missing_paths.add(src_resolved)
+        return WriteResult()
+
+    def _check_lint(self, _path: str) -> Any:
+        ensure_hermes_agent_root_on_path()
+        from tools.file_operations import LintResult
+
+        return LintResult(success=True, skipped=True, message="preview")
+
+
+def resolve_preview_target_path(path: str) -> Path:
+    candidate = Path(str(path or "").strip()).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    base_dir = Path(os.environ.get("TERMINAL_CWD") or os.getcwd()).expanduser()
+    return (base_dir / candidate).resolve()
+
+
+def build_write_review_request(tool_name: str, args: dict[str, Any], *, task_id: str = "default") -> dict[str, Any] | None:
+    ensure_hermes_agent_root_on_path()
+    from tools.fuzzy_match import fuzzy_find_and_replace
+    from tools.patch_parser import apply_v4a_operations, parse_v4a_patch
+
+    if tool_name == "write_file":
+        path = str(args.get("path") or "").strip()
+        if not path:
+            return None
+        content = str(args.get("content") or "")
+        resolved_path = resolve_preview_target_path(path)
+        old_content = resolved_path.read_text(encoding="utf-8") if resolved_path.exists() else ""
+        diff = build_unified_diff(str(resolved_path), old_content, content) or f"# No textual changes for {resolved_path}"
+        additions, deletions = count_diff_changes(diff)
+        return {
+            "toolName": tool_name,
+            "filePath": str(resolved_path),
+            "title": f"确认写入 {resolved_path.name}",
+            "meta": format_write_review_meta(tool_name=tool_name, file_count=1, additions=additions, deletions=deletions),
+            "diff": clamp_write_review_diff(diff),
+        }
+
+    if tool_name != "patch":
+        return None
+
+    mode = str(args.get("mode") or "replace").strip().lower()
+    if mode == "replace":
+        path = str(args.get("path") or "").strip()
+        old_string = args.get("old_string")
+        new_string = args.get("new_string")
+        replace_all = bool(args.get("replace_all"))
+        if not path or old_string is None or new_string is None:
+            return None
+        resolved_path = resolve_preview_target_path(path)
+        if not resolved_path.exists():
+            return {"error": f"Failed to read file: {resolved_path}"}
+        original = resolved_path.read_text(encoding="utf-8")
+        updated, match_count, _strategy, error = fuzzy_find_and_replace(
+            original,
+            str(old_string),
+            str(new_string),
+            replace_all,
+        )
+        if error or match_count == 0:
+            return {"error": error or f"Could not find match for old_string in {resolved_path}"}
+        diff = build_unified_diff(str(resolved_path), original, updated) or f"# No textual changes for {resolved_path}"
+        additions, deletions = count_diff_changes(diff)
+        return {
+            "toolName": tool_name,
+            "filePath": str(resolved_path),
+            "title": f"确认修改 {resolved_path.name}",
+            "meta": format_write_review_meta(tool_name=tool_name, file_count=1, additions=additions, deletions=deletions),
+            "diff": clamp_write_review_diff(diff),
+        }
+
+    if mode == "patch":
+        patch_content = str(args.get("patch") or "")
+        operations, parse_error = parse_v4a_patch(patch_content)
+        if parse_error:
+            return {"error": f"Failed to parse patch: {parse_error}"}
+        preview_ops = PreviewFileOperations()
+        preview_result = apply_v4a_operations(operations, preview_ops)
+        if preview_result.error:
+            return {"error": preview_result.error}
+        diff = str(preview_result.diff or "").strip()
+        target_paths = [
+            *[str(path) for path in preview_result.files_modified],
+            *[str(path) for path in preview_result.files_created],
+            *[str(path) for path in preview_result.files_deleted],
+        ]
+        file_path = ", ".join(target_paths) if target_paths else "multiple files"
+        additions, deletions = count_diff_changes(diff)
+        return {
+            "toolName": tool_name,
+            "filePath": file_path,
+            "title": f"确认应用补丁 ({len(target_paths) or len(operations)} files)",
+            "meta": format_write_review_meta(
+                tool_name=tool_name,
+                file_count=max(len(target_paths), 1),
+                additions=additions,
+                deletions=deletions,
+            ),
+            "diff": clamp_write_review_diff(diff or "# Patch produced no textual diff"),
+        }
+
+    return None
+
+
+def install_write_review_handlers(control_channel: BridgeControlChannel | None) -> None:
+    if control_channel is None:
+        return
+    ensure_hermes_agent_root_on_path()
+    from tools.registry import registry
+
+    for tool_name in ("write_file", "patch"):
+        entry = registry.get_entry(tool_name)
+        if entry is None:
+            continue
+        if getattr(entry.handler, "_is_write_review_wrapper", False):
+            continue
+        original_handler = entry.handler
+
+        def _wrapped(args: dict[str, Any], __original: Callable[..., str] = original_handler, __tool_name: str = tool_name, **kwargs: Any) -> str:
+            review = build_write_review_request(__tool_name, args, task_id=str(kwargs.get("task_id") or "default"))
+            if review is None:
+                return __original(args, **kwargs)
+            if review.get("error"):
+                return json.dumps({"error": review["error"]}, ensure_ascii=False)
+            request_id = f"write-review-{next(_WRITE_REVIEW_REQUEST_IDS)}"
+            emit(
+                {
+                    "type": "write_review",
+                    "requestId": request_id,
+                    "toolName": review.get("toolName"),
+                    "filePath": review.get("filePath"),
+                    "title": review.get("title"),
+                    "meta": review.get("meta"),
+                    "diff": review.get("diff"),
+                }
+            )
+            approved = control_channel.wait_for_write_review(request_id)
+            if not approved:
+                return json.dumps({"error": "User canceled the file write after reviewing the diff."}, ensure_ascii=False)
+            return __original(args, **kwargs)
+
+        setattr(_wrapped, "_is_write_review_wrapper", True)
+        entry.handler = _wrapped
 
 
 def humanize_status(event_type: str, message: str) -> str:
@@ -348,9 +642,7 @@ def prepare_messages_for_non_vision_model(agent: Any, messages: list[dict[str, A
 def main() -> int:
     logging.disable(logging.CRITICAL)
 
-    hermes_agent_root = Path(os.environ.get("HERMES_AGENT_ROOT", DEFAULT_HERMES_AGENT_ROOT)).expanduser()
-    if str(hermes_agent_root) not in sys.path:
-        sys.path.insert(0, str(hermes_agent_root))
+    hermes_agent_root = ensure_hermes_agent_root_on_path()
 
     hermes_home = resolve_hermes_home()
     os.environ["HERMES_HOME"] = str(hermes_home)
@@ -365,10 +657,11 @@ def main() -> int:
         pass
 
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
+        payload = json.loads((sys.stdin.readline() or "").strip() or "{}")
     except Exception as exc:
         emit({"type": "error", "message": f"Invalid bridge payload: {exc}"})
         return 1
+    control_channel = BridgeControlChannel(sys.stdin)
 
     prompt = str(payload.get("prompt") or "").strip()
     system_prompt = str(payload.get("systemPrompt") or "").strip()
@@ -396,6 +689,7 @@ def main() -> int:
         return 1
 
     cfg = load_config()
+    install_write_review_handlers(control_channel)
 
     model_cfg = cfg.get("model") or {}
     if isinstance(model_cfg, str):

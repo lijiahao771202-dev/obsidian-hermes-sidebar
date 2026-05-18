@@ -98,6 +98,65 @@ function formatBridgeConnectionStatus(sessionId, usage) {
   const calls = typeof usage.apiCalls === "number" && usage.apiCalls > 0 ? ` \xB7 ${usage.apiCalls} calls` : "";
   return `${sessionLabel} \xB7 cache ${usage.cacheHitRate}%${calls}`;
 }
+function getContextModeDescription(mode) {
+  switch (mode) {
+    case "selection":
+      return "\u9009\u533A\u4F18\u5148";
+    case "note":
+      return "\u5F53\u524D\u7B14\u8BB0";
+    case "manual":
+      return "\u624B\u52A8";
+    case "auto":
+    default:
+      return "\u81EA\u52A8";
+  }
+}
+function pickLiveContextForMode(liveContext, mode) {
+  const titleContext = {
+    noteTitle: liveContext.noteTitle,
+    notePath: liveContext.notePath
+  };
+  if (mode === "manual") {
+    return {};
+  }
+  if (mode === "note") {
+    return removeEmptyLiveContext(titleContext);
+  }
+  if (mode === "selection" || mode === "auto" && liveContext.selectionText) {
+    return removeEmptyLiveContext({
+      ...titleContext,
+      selectionText: liveContext.selectionText,
+      noteContext: liveContext.noteContext
+    });
+  }
+  return removeEmptyLiveContext(titleContext);
+}
+function buildContextHealthItems(input) {
+  const sessionValue = input.sessionId ? formatSelectionPreview(input.sessionId, 32) : "\u672A\u8FDE\u63A5";
+  const cacheValue = input.usage && typeof input.usage.cacheHitRate === "number" ? `${input.usage.cacheHitRate}%${input.usage.apiCalls ? ` \xB7 ${input.usage.apiCalls} calls` : ""}` : "\u7B49\u5F85\u4E0B\u4E00\u6B21\u56DE\u590D";
+  const contextParts = [
+    getContextModeDescription(input.contextMode),
+    input.liveContext.noteTitle,
+    input.liveContext.selectionText ? `\u9009\u533A ${input.liveContext.selectionText.trim().length} \u5B57` : "",
+    input.liveContext.noteContext ? `\u9644\u8FD1\u4E0A\u4E0B\u6587 ${input.liveContext.noteContext.trim().length} \u5B57` : ""
+  ].filter(Boolean);
+  const pendingParts = [
+    input.pendingContextCount > 0 ? `${input.pendingContextCount} \u6BB5\u4E0A\u4E0B\u6587` : "",
+    input.pendingImageCount > 0 ? `${input.pendingImageCount} \u5F20\u56FE\u7247` : "",
+    input.queueCount > 0 ? `${input.queueCount} \u6761\u6392\u961F` : ""
+  ].filter(Boolean);
+  return [
+    { label: "Session", value: sessionValue },
+    { label: "Cache", value: cacheValue },
+    { label: "Context", value: contextParts.join(" \xB7 ") || "\u65E0\u5B9E\u65F6\u4E0A\u4E0B\u6587" },
+    { label: "Pending", value: pendingParts.join(" \xB7 ") || "\u65E0\u5F85\u53D1\u9001\u9644\u4EF6" }
+  ];
+}
+function removeEmptyLiveContext(input) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => typeof value === "string" && value.trim())
+  );
+}
 function pickSelectionText(input) {
   const mode = (input.mode || "").trim().toLowerCase();
   const editorSelection = (input.editorSelection || "").trim();
@@ -2231,6 +2290,12 @@ var HERMES_REASONING_OPTIONS = [
   { label: "\u9AD8", value: "high" },
   { label: "\u8D85\u5F3A", value: "xhigh" }
 ];
+var HERMES_CONTEXT_MODE_OPTIONS = [
+  { label: "\u81EA\u52A8", value: "auto" },
+  { label: "\u9009\u533A", value: "selection" },
+  { label: "\u7B14\u8BB0", value: "note" },
+  { label: "\u624B\u52A8", value: "manual" }
+];
 var DEFAULT_SETTINGS = {
   hermesBinary: DEFAULT_HERMES_BINARY,
   provider: DEFAULT_PROVIDER,
@@ -2239,7 +2304,8 @@ var DEFAULT_SETTINGS = {
   fallbackProvider: DEFAULT_FALLBACK_PROVIDER,
   fallbackModel: DEFAULT_FALLBACK_MODEL,
   systemPrompt: "You are Hermes inside Obsidian. Be concise, context-aware, and helpful with note-writing tasks.",
-  pathPrefix: DEFAULT_HERMES_PATH_PREFIX
+  pathPrefix: DEFAULT_HERMES_PATH_PREFIX,
+  contextMode: "auto"
 };
 var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
   constructor() {
@@ -2357,6 +2423,7 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
     const persistedData = isPersistedDataShape(rawData) ? rawData : void 0;
     const legacySettings = isPlainObject(rawData) ? rawData : void 0;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, persistedData?.settings ?? legacySettings ?? {});
+    this.settings.contextMode = normalizeContextMode(this.settings.contextMode);
     this.chatSessions = restoreSessions(persistedData?.sessions);
     this.activeSessionId = pickNextActiveSessionId(this.chatSessions, persistedData?.activeSessionId) ?? this.chatSessions[0]?.id ?? "";
   }
@@ -2756,6 +2823,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.liveContextEl = void 0;
     this.quickActionsEl = void 0;
     this.imageFileInputEl = void 0;
+    this.contextModeSelectEl = void 0;
     const previousMessagesScrollTop = this.messagesEl?.scrollTop ?? null;
     const wasAutoSticking = this.shouldAutoStickToBottom;
     this.captureScrollIntent();
@@ -2857,6 +2925,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     }
     this.liveContextEl = root.createDiv({ cls: "hermes-sidebar-live-context" });
     this.renderLiveContext();
+    this.renderHealthPanel(root);
     if (this.queuedTurns.length > 0) {
       const queueEl = root.createDiv({ cls: "hermes-sidebar-queue" });
       queueEl.createDiv({
@@ -2997,6 +3066,31 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       this.statusText = `\u601D\u8003\u5F3A\u5EA6\u5DF2\u5207\u5230 ${this.getReasoningLabel(value)}`;
       this.render(false);
     });
+    const contextModeControl = controls.createDiv({
+      cls: "hermes-sidebar-control-group"
+    });
+    contextModeControl.createDiv({
+      cls: "hermes-sidebar-control-label",
+      text: "\u4E0A\u4E0B\u6587"
+    });
+    this.contextModeSelectEl = contextModeControl.createEl("select", {
+      cls: "hermes-sidebar-select hermes-sidebar-context-mode-select"
+    });
+    for (const option of HERMES_CONTEXT_MODE_OPTIONS) {
+      this.contextModeSelectEl.createEl("option", {
+        value: option.value,
+        text: option.label
+      });
+    }
+    this.contextModeSelectEl.value = this.plugin.settings.contextMode;
+    this.contextModeSelectEl.addEventListener("change", async (event) => {
+      const select = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget : this.contextModeSelectEl;
+      const value = normalizeContextMode(select?.value);
+      this.plugin.settings.contextMode = value;
+      await this.plugin.saveSettings();
+      this.statusText = `\u4E0A\u4E0B\u6587\u6A21\u5F0F\u5DF2\u5207\u5230 ${getContextModeDescription(value)}`;
+      this.render(false);
+    });
     this.sendButtonEl = toolbar.createEl("button", {
       cls: "hermes-sidebar-send",
       text: this.isSending ? "\u6392\u961F" : "\u53D1\u9001"
@@ -3028,6 +3122,32 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     }
     this.liveContextEl.empty();
     this.liveContextEl.addClass("is-empty");
+  }
+  renderHealthPanel(root) {
+    const details = root.createEl("details", { cls: "hermes-sidebar-health" });
+    const summary = details.createEl("summary", { cls: "hermes-sidebar-health-summary" });
+    summary.createSpan({ cls: "hermes-sidebar-health-title", text: "\u72B6\u6001" });
+    const liveContext = this.lastTurnContextSnapshot?.liveContext ?? this.getActiveTurnLiveContext();
+    const items = buildContextHealthItems({
+      sessionId: this.plugin.getActiveSession().sessionId,
+      contextMode: this.plugin.settings.contextMode,
+      pendingContextCount: this.pendingContexts.length,
+      pendingImageCount: this.pendingImages.length,
+      queueCount: this.queuedTurns.length,
+      liveContext,
+      usage: this.lastUsage
+    });
+    const cacheItem = items.find((item) => item.label === "Cache");
+    summary.createSpan({
+      cls: "hermes-sidebar-health-pill",
+      text: cacheItem?.value ?? "\u7B49\u5F85\u4E0B\u4E00\u6B21\u56DE\u590D"
+    });
+    const grid = details.createDiv({ cls: "hermes-sidebar-health-grid" });
+    for (const item of items) {
+      const row = grid.createDiv({ cls: "hermes-sidebar-health-item" });
+      row.createSpan({ cls: "hermes-sidebar-health-label", text: item.label });
+      row.createSpan({ cls: "hermes-sidebar-health-value", text: item.value });
+    }
   }
   renderChatMessage(message, options = {}) {
     if (!this.messagesEl) {
@@ -3649,13 +3769,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
   }
   getActiveTurnLiveContext() {
     const liveContext = this.plugin.getLiveContextInfo();
-    if (!liveContext.selectionText) {
-      return {};
-    }
-    return {
-      selectionText: liveContext.selectionText,
-      noteContext: liveContext.noteContext
-    };
+    return pickLiveContextForMode(liveContext, this.plugin.settings.contextMode);
   }
   nextMessageId(prefix) {
     return `${prefix}-${Date.now()}-${++this.messageCounter}`;
@@ -4118,6 +4232,13 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       model: this.plugin.settings.model,
       reasoningEffort: this.plugin.settings.reasoningEffort
     };
+    this.lastTurnContextSnapshot = {
+      mode: this.plugin.settings.contextMode,
+      liveContext: turn.liveContext,
+      pendingContextCount: turn.contexts.length,
+      pendingImageCount: turn.images.length,
+      queueCount: this.queuedTurns.length
+    };
     this.queuedTurns.push(turn);
     this.pendingContexts = [];
     this.pendingImages = [];
@@ -4209,6 +4330,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
           reasoningEffort: turn.reasoningEffort
         }),
         pathPrefix: this.plugin.settings.pathPrefix,
+        onWriteReview: (review) => this.confirmChatWriteReview(review),
         onEvent: (event) => {
           if (canUpdateBridgeEventWithoutFullRender(event.type)) {
             if (event.type === "status") {
@@ -4248,6 +4370,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
             if (event.sessionId) {
               session.sessionId = event.sessionId;
             }
+            this.lastUsage = event.usage;
             this.finalizeActiveStream(event.text);
             this.settleInlineActivityTimeline();
             this.activeStreamingMessageIndex = null;
@@ -4262,6 +4385,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       if (result.sessionId) {
         session.sessionId = result.sessionId;
       }
+      this.lastUsage = result.usage;
       if (!hasFinalized) {
         this.finalizeActiveStream(result.text);
         this.settleInlineActivityTimeline();
@@ -4313,6 +4437,18 @@ ${message}`
     }
     this.statusText = "\u6B63\u5728\u505C\u6B62\u5F53\u524D\u4EFB\u52A1";
     this.activeRunCancel();
+  }
+  async confirmChatWriteReview(review) {
+    this.statusText = `\u7B49\u5F85\u786E\u8BA4\u5199\u5165 ${(0, import_node_path.basename)(review.filePath || "\u6587\u4EF6")}`;
+    return new Promise((resolve2) => {
+      const modal = new HermesWriteReviewModal(this.app, review, (approved) => {
+        if (!approved) {
+          this.statusText = "\u5DF2\u53D6\u6D88\u8FD9\u6B21\u5199\u5165";
+        }
+        resolve2(approved);
+      });
+      modal.open();
+    });
   }
   persistActiveSession(touch = true) {
     const session = this.plugin.getActiveSession();
@@ -4428,6 +4564,97 @@ var HermesImagePreviewModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
+var HermesWriteReviewModal = class extends import_obsidian2.Modal {
+  constructor(app, review, resolve2) {
+    super(app);
+    this.didResolve = false;
+    this.keydownHandler = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.dismiss(false);
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.dismiss(true);
+      }
+    };
+    this.review = review;
+    this.resolve = resolve2;
+  }
+  onOpen() {
+    const { contentEl, modalEl } = this;
+    modalEl.addClass("hermes-chat-review-modal-shell");
+    contentEl.empty();
+    contentEl.addClass("hermes-chat-review-modal");
+    const title = this.review.title?.trim() || `\u786E\u8BA4\u5199\u5165 ${(0, import_node_path.basename)(this.review.filePath || "\u6587\u4EF6")}`;
+    const meta = this.review.meta?.trim() || `${this.review.toolName || "write"} \xB7 \u804A\u5929\u5199\u5165\u786E\u8BA4`;
+    const filePath = this.review.filePath?.trim();
+    const diffText = this.review.diff?.trim() || "(\u6CA1\u6709\u53EF\u663E\u793A\u7684 diff)";
+    const header = contentEl.createDiv({ cls: "hermes-chat-review-header" });
+    const titleWrap = header.createDiv({ cls: "hermes-chat-review-title-wrap" });
+    titleWrap.createEl("h2", { text: title });
+    titleWrap.createDiv({ cls: "hermes-chat-review-meta", text: meta });
+    if (filePath) {
+      titleWrap.createEl("code", { cls: "hermes-chat-review-path", text: filePath });
+    }
+    const diffPanel = contentEl.createDiv({ cls: "hermes-chat-review-diff" });
+    for (const line of diffText.split("\n")) {
+      diffPanel.createDiv({
+        cls: `hermes-chat-review-line ${this.getDiffLineClass(line)}`,
+        text: line || " "
+      });
+    }
+    const actions = contentEl.createDiv({ cls: "hermes-chat-review-actions" });
+    const cancelButton = actions.createEl("button", {
+      text: "\u53D6\u6D88",
+      attr: { type: "button" }
+    });
+    const confirmButton = actions.createEl("button", {
+      cls: "mod-cta",
+      text: "\u786E\u8BA4\u5199\u5165",
+      attr: { type: "button" }
+    });
+    cancelButton.addEventListener("click", () => this.dismiss(false));
+    confirmButton.addEventListener("click", () => this.dismiss(true));
+    document.addEventListener("keydown", this.keydownHandler, true);
+    window.setTimeout(() => confirmButton.focus({ preventScroll: true }), 0);
+  }
+  onClose() {
+    document.removeEventListener("keydown", this.keydownHandler, true);
+    this.modalEl.removeClass("hermes-chat-review-modal-shell");
+    this.contentEl.removeClass("hermes-chat-review-modal");
+    this.contentEl.empty();
+    this.finish(false);
+  }
+  dismiss(approved) {
+    this.finish(approved);
+    this.close();
+  }
+  finish(approved) {
+    if (this.didResolve) {
+      return;
+    }
+    this.didResolve = true;
+    this.resolve(approved);
+  }
+  getDiffLineClass(line) {
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      return "is-file";
+    }
+    if (line.startsWith("@@")) {
+      return "is-hunk";
+    }
+    if (line.startsWith("+")) {
+      return "is-add";
+    }
+    if (line.startsWith("-")) {
+      return "is-remove";
+    }
+    return "is-context";
+  }
+};
 var HermesSidebarSettingTab = class extends import_obsidian2.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -4501,8 +4728,54 @@ function runHermesBridge(input) {
     let stderrBuffer = "";
     let settled = false;
     let finalResult = null;
+    const sendControlMessage = (payload2) => {
+      if (!child?.stdin || child.killed) {
+        return;
+      }
+      try {
+        child.stdin.write(`${JSON.stringify(payload2)}
+`);
+      } catch {
+      }
+    };
     const handleEvent = (event) => {
       if (!event || typeof event !== "object") {
+        return;
+      }
+      if (event.type === "write_review") {
+        const requestId = event.requestId?.trim();
+        if (!requestId) {
+          return;
+        }
+        input.onEvent?.({
+          type: "status",
+          text: `\u7B49\u5F85\u786E\u8BA4\u5199\u5165 ${(0, import_node_path.basename)(event.filePath || "\u6587\u4EF6")}`
+        });
+        void (async () => {
+          const approved = input.onWriteReview ? await input.onWriteReview({
+            requestId,
+            toolName: event.toolName,
+            title: event.title,
+            meta: event.meta,
+            filePath: event.filePath,
+            diff: event.diff
+          }) : false;
+          sendControlMessage({
+            type: "write_review_response",
+            requestId,
+            approved
+          });
+          input.onEvent?.({
+            type: "status",
+            text: approved ? "\u5DF2\u786E\u8BA4\u5199\u5165\uFF0CHermes \u7EE7\u7EED\u6267\u884C" : "\u5DF2\u53D6\u6D88\u8FD9\u6B21\u5199\u5165"
+          });
+        })().catch(() => {
+          sendControlMessage({
+            type: "write_review_response",
+            requestId,
+            approved: false
+          });
+        });
         return;
       }
       if (event.type === "error") {
@@ -4591,8 +4864,8 @@ function runHermesBridge(input) {
       conversationHistory: input.conversationHistory
     };
     try {
-      child.stdin?.write(JSON.stringify(payload));
-      child.stdin?.end();
+      child.stdin?.write(`${JSON.stringify(payload)}
+`);
     } catch (error) {
       if (!settled) {
         settled = true;
@@ -4636,6 +4909,10 @@ function buildHermesSystemPrompt(basePrompt, runtime) {
   return trimmed ? `${trimmed}
 
 ${progressInstruction}` : progressInstruction;
+}
+function normalizeContextMode(value) {
+  const normalized = (value || "").trim();
+  return HERMES_CONTEXT_MODE_OPTIONS.some((option) => option.value === normalized) ? normalized : "auto";
 }
 function resolveBridgeScriptPath(app, manifestDir) {
   if (manifestDir && (0, import_node_path.isAbsolute)(manifestDir)) {

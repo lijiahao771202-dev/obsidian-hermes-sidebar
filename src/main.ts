@@ -18,12 +18,15 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import {
 	DEFAULT_SESSION_TITLE,
+	type ContextMode,
 	applySessionSnapshot,
 	adjustIndexAfterInsertion,
+	buildContextHealthItems,
 	buildSessionTitle,
 	formatBridgeConnectionStatus,
 	canUpdateBridgeEventWithoutFullRender,
 	formatActivityTimelineSummary,
+	getContextModeDescription,
 	getActivityChainTailVisibleCount,
 	formatSelectionPreview,
 	getAppendIndexAfterTurnMessages,
@@ -33,6 +36,7 @@ import {
 	getVisibleActivityTimelineEntries,
 	isComposerSendShortcut,
 	pickNextActiveSessionId,
+	pickLiveContextForMode,
 	pickSelectionText,
 	shouldDeferScrollRestore,
 	shouldHideStatusText,
@@ -90,6 +94,12 @@ const HERMES_REASONING_OPTIONS = [
 	{ label: "高", value: "high" },
 	{ label: "超强", value: "xhigh" }
 ] as const;
+const HERMES_CONTEXT_MODE_OPTIONS: Array<{ label: string; value: ContextMode }> = [
+	{ label: "自动", value: "auto" },
+	{ label: "选区", value: "selection" },
+	{ label: "笔记", value: "note" },
+	{ label: "手动", value: "manual" }
+];
 
 type HermesRole = "user" | "assistant" | "system";
 type HermesMessageKind = "user" | "progress" | "activity" | "final";
@@ -144,6 +154,7 @@ interface HermesSidebarSettings {
 	fallbackModel: string;
 	systemPrompt: string;
 	pathPrefix: string;
+	contextMode: ContextMode;
 }
 
 interface HermesChatSession {
@@ -183,6 +194,14 @@ interface HermesUsageSummary {
 	cacheHitRate?: number | null;
 }
 
+interface HermesTurnContextSnapshot {
+	mode: ContextMode;
+	liveContext: LiveContextInfo;
+	pendingContextCount: number;
+	pendingImageCount: number;
+	queueCount: number;
+}
+
 interface HermesBridgePayload {
 	prompt: string;
 	systemPrompt: string;
@@ -195,7 +214,7 @@ interface HermesBridgePayload {
 }
 
 interface HermesBridgeEvent {
-	type: "status" | "activity" | "progress" | "delta" | "segment_break" | "final" | "error";
+	type: "status" | "activity" | "progress" | "delta" | "segment_break" | "final" | "error" | "write_review";
 	text?: string;
 	message?: string;
 	sessionId?: string;
@@ -206,11 +225,31 @@ interface HermesBridgeEvent {
 	status?: "running" | "done" | "error" | "info";
 	duration?: number;
 	isError?: boolean;
+	requestId?: string;
+	title?: string;
+	meta?: string;
+	filePath?: string;
+	diff?: string;
 }
 
 interface HermesBridgeRun {
 	promise: Promise<HermesRunResult>;
 	cancel: () => void;
+}
+
+interface HermesWriteReviewRequest {
+	requestId: string;
+	toolName?: string;
+	title?: string;
+	meta?: string;
+	filePath?: string;
+	diff?: string;
+}
+
+interface HermesBridgeControlMessage {
+	type: "write_review_response";
+	requestId: string;
+	approved: boolean;
 }
 
 interface HermesActivityEntry {
@@ -259,7 +298,8 @@ const DEFAULT_SETTINGS: HermesSidebarSettings = {
 	fallbackProvider: DEFAULT_FALLBACK_PROVIDER,
 	fallbackModel: DEFAULT_FALLBACK_MODEL,
 	systemPrompt: "You are Hermes inside Obsidian. Be concise, context-aware, and helpful with note-writing tasks.",
-	pathPrefix: DEFAULT_HERMES_PATH_PREFIX
+	pathPrefix: DEFAULT_HERMES_PATH_PREFIX,
+	contextMode: "auto"
 };
 
 class HermesSidebarPlugin extends Plugin {
@@ -391,10 +431,11 @@ class HermesSidebarPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		const rawData = await this.loadData();
-		const persistedData = isPersistedDataShape(rawData) ? rawData : undefined;
-		const legacySettings = isPlainObject(rawData) ? rawData : undefined;
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, persistedData?.settings ?? legacySettings ?? {});
-		this.chatSessions = restoreSessions(persistedData?.sessions);
+			const persistedData = isPersistedDataShape(rawData) ? rawData : undefined;
+			const legacySettings = isPlainObject(rawData) ? rawData : undefined;
+			this.settings = Object.assign({}, DEFAULT_SETTINGS, persistedData?.settings ?? legacySettings ?? {});
+			this.settings.contextMode = normalizeContextMode(this.settings.contextMode);
+			this.chatSessions = restoreSessions(persistedData?.sessions);
 		this.activeSessionId =
 			pickNextActiveSessionId(this.chatSessions, persistedData?.activeSessionId) ?? this.chatSessions[0]?.id ?? "";
 	}
@@ -746,6 +787,7 @@ class HermesSidebarView extends ItemView {
 	private sendButtonEl?: HTMLButtonElement;
 	private modelSelectEl?: HTMLSelectElement;
 	private reasoningSelectEl?: HTMLSelectElement;
+	private contextModeSelectEl?: HTMLSelectElement;
 	private isSending = false;
 	private isDrainingQueue = false;
 	private activeStreamingMessageIndex: number | null = null;
@@ -774,6 +816,8 @@ class HermesSidebarView extends ItemView {
 	private activityCounter = 0;
 	private expandedActivityMessageIds = new Set<string>();
 	private expandedActivityGroupIds = new Set<string>();
+	private lastUsage?: HermesUsageSummary;
+	private lastTurnContextSnapshot?: HermesTurnContextSnapshot;
 
 	constructor(leaf: WorkspaceLeaf, plugin: HermesSidebarPlugin) {
 		super(leaf);
@@ -889,6 +933,7 @@ class HermesSidebarView extends ItemView {
 		this.liveContextEl = undefined;
 		this.quickActionsEl = undefined;
 		this.imageFileInputEl = undefined;
+		this.contextModeSelectEl = undefined;
 		const previousMessagesScrollTop = this.messagesEl?.scrollTop ?? null;
 		const wasAutoSticking = this.shouldAutoStickToBottom;
 		this.captureScrollIntent();
@@ -995,6 +1040,7 @@ class HermesSidebarView extends ItemView {
 
 		this.liveContextEl = root.createDiv({ cls: "hermes-sidebar-live-context" });
 		this.renderLiveContext();
+		this.renderHealthPanel(root);
 
 		if (this.queuedTurns.length > 0) {
 			const queueEl = root.createDiv({ cls: "hermes-sidebar-queue" });
@@ -1145,6 +1191,32 @@ class HermesSidebarView extends ItemView {
 			this.render(false);
 		});
 
+		const contextModeControl = controls.createDiv({
+			cls: "hermes-sidebar-control-group"
+		});
+		contextModeControl.createDiv({
+			cls: "hermes-sidebar-control-label",
+			text: "上下文"
+		});
+		this.contextModeSelectEl = contextModeControl.createEl("select", {
+			cls: "hermes-sidebar-select hermes-sidebar-context-mode-select"
+		});
+		for (const option of HERMES_CONTEXT_MODE_OPTIONS) {
+			this.contextModeSelectEl.createEl("option", {
+				value: option.value,
+				text: option.label
+			});
+		}
+		this.contextModeSelectEl.value = this.plugin.settings.contextMode;
+		this.contextModeSelectEl.addEventListener("change", async (event) => {
+			const select = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget : this.contextModeSelectEl;
+			const value = normalizeContextMode(select?.value);
+			this.plugin.settings.contextMode = value;
+			await this.plugin.saveSettings();
+			this.statusText = `上下文模式已切到 ${getContextModeDescription(value)}`;
+			this.render(false);
+		});
+
 		this.sendButtonEl = toolbar.createEl("button", {
 			cls: "hermes-sidebar-send",
 			text: this.isSending ? "排队" : "发送"
@@ -1180,6 +1252,33 @@ class HermesSidebarView extends ItemView {
 
 		this.liveContextEl.empty();
 		this.liveContextEl.addClass("is-empty");
+	}
+
+	private renderHealthPanel(root: HTMLElement): void {
+		const details = root.createEl("details", { cls: "hermes-sidebar-health" });
+		const summary = details.createEl("summary", { cls: "hermes-sidebar-health-summary" });
+		summary.createSpan({ cls: "hermes-sidebar-health-title", text: "状态" });
+		const liveContext = this.lastTurnContextSnapshot?.liveContext ?? this.getActiveTurnLiveContext();
+		const items = buildContextHealthItems({
+			sessionId: this.plugin.getActiveSession().sessionId,
+			contextMode: this.plugin.settings.contextMode,
+			pendingContextCount: this.pendingContexts.length,
+			pendingImageCount: this.pendingImages.length,
+			queueCount: this.queuedTurns.length,
+			liveContext,
+			usage: this.lastUsage
+		});
+		const cacheItem = items.find((item) => item.label === "Cache");
+		summary.createSpan({
+			cls: "hermes-sidebar-health-pill",
+			text: cacheItem?.value ?? "等待下一次回复"
+		});
+		const grid = details.createDiv({ cls: "hermes-sidebar-health-grid" });
+		for (const item of items) {
+			const row = grid.createDiv({ cls: "hermes-sidebar-health-item" });
+			row.createSpan({ cls: "hermes-sidebar-health-label", text: item.label });
+			row.createSpan({ cls: "hermes-sidebar-health-value", text: item.value });
+		}
 	}
 
 	private renderChatMessage(
@@ -1895,13 +1994,7 @@ class HermesSidebarView extends ItemView {
 
 	private getActiveTurnLiveContext(): LiveContextInfo {
 		const liveContext = this.plugin.getLiveContextInfo();
-		if (!liveContext.selectionText) {
-			return {};
-		}
-		return {
-			selectionText: liveContext.selectionText,
-			noteContext: liveContext.noteContext
-		};
+		return pickLiveContextForMode(liveContext, this.plugin.settings.contextMode);
 	}
 
 	private nextMessageId(prefix: string): string {
@@ -2454,6 +2547,13 @@ class HermesSidebarView extends ItemView {
 			model: this.plugin.settings.model,
 			reasoningEffort: this.plugin.settings.reasoningEffort
 		};
+		this.lastTurnContextSnapshot = {
+			mode: this.plugin.settings.contextMode,
+			liveContext: turn.liveContext,
+			pendingContextCount: turn.contexts.length,
+			pendingImageCount: turn.images.length,
+			queueCount: this.queuedTurns.length
+		};
 
 		this.queuedTurns.push(turn);
 		this.pendingContexts = [];
@@ -2553,6 +2653,7 @@ class HermesSidebarView extends ItemView {
 					reasoningEffort: turn.reasoningEffort
 				}),
 				pathPrefix: this.plugin.settings.pathPrefix,
+				onWriteReview: (review) => this.confirmChatWriteReview(review),
 				onEvent: (event) => {
 					if (canUpdateBridgeEventWithoutFullRender(event.type)) {
 						if (event.type === "status") {
@@ -2597,6 +2698,7 @@ class HermesSidebarView extends ItemView {
 						if (event.sessionId) {
 							session.sessionId = event.sessionId;
 						}
+						this.lastUsage = event.usage;
 						this.finalizeActiveStream(event.text);
 						this.settleInlineActivityTimeline();
 						this.activeStreamingMessageIndex = null;
@@ -2613,6 +2715,7 @@ class HermesSidebarView extends ItemView {
 			if (result.sessionId) {
 				session.sessionId = result.sessionId;
 			}
+			this.lastUsage = result.usage;
 			if (!hasFinalized) {
 				this.finalizeActiveStream(result.text);
 				this.settleInlineActivityTimeline();
@@ -2663,6 +2766,19 @@ class HermesSidebarView extends ItemView {
 		}
 		this.statusText = "正在停止当前任务";
 		this.activeRunCancel();
+	}
+
+	private async confirmChatWriteReview(review: HermesWriteReviewRequest): Promise<boolean> {
+		this.statusText = `等待确认写入 ${basename(review.filePath || "文件")}`;
+		return new Promise((resolve) => {
+			const modal = new HermesWriteReviewModal(this.app, review, (approved) => {
+				if (!approved) {
+					this.statusText = "已取消这次写入";
+				}
+				resolve(approved);
+			});
+			modal.open();
+		});
 	}
 
 	private persistActiveSession(touch = true): void {
@@ -2799,6 +2915,111 @@ class HermesImagePreviewModal extends Modal {
 	}
 }
 
+class HermesWriteReviewModal extends Modal {
+	private review: HermesWriteReviewRequest;
+	private resolve: (approved: boolean) => void;
+	private didResolve = false;
+	private keydownHandler = (event: KeyboardEvent): void => {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			event.stopPropagation();
+			this.dismiss(false);
+		}
+		if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+			event.preventDefault();
+			event.stopPropagation();
+			this.dismiss(true);
+		}
+	};
+
+	constructor(app: App, review: HermesWriteReviewRequest, resolve: (approved: boolean) => void) {
+		super(app);
+		this.review = review;
+		this.resolve = resolve;
+	}
+
+	onOpen(): void {
+		const { contentEl, modalEl } = this;
+		modalEl.addClass("hermes-chat-review-modal-shell");
+		contentEl.empty();
+		contentEl.addClass("hermes-chat-review-modal");
+
+		const title = this.review.title?.trim() || `确认写入 ${basename(this.review.filePath || "文件")}`;
+		const meta = this.review.meta?.trim() || `${this.review.toolName || "write"} · 聊天写入确认`;
+		const filePath = this.review.filePath?.trim();
+		const diffText = this.review.diff?.trim() || "(没有可显示的 diff)";
+
+		const header = contentEl.createDiv({ cls: "hermes-chat-review-header" });
+		const titleWrap = header.createDiv({ cls: "hermes-chat-review-title-wrap" });
+		titleWrap.createEl("h2", { text: title });
+		titleWrap.createDiv({ cls: "hermes-chat-review-meta", text: meta });
+		if (filePath) {
+			titleWrap.createEl("code", { cls: "hermes-chat-review-path", text: filePath });
+		}
+
+		const diffPanel = contentEl.createDiv({ cls: "hermes-chat-review-diff" });
+		for (const line of diffText.split("\n")) {
+			diffPanel.createDiv({
+				cls: `hermes-chat-review-line ${this.getDiffLineClass(line)}`,
+				text: line || " "
+			});
+		}
+
+		const actions = contentEl.createDiv({ cls: "hermes-chat-review-actions" });
+		const cancelButton = actions.createEl("button", {
+			text: "取消",
+			attr: { type: "button" }
+		});
+		const confirmButton = actions.createEl("button", {
+			cls: "mod-cta",
+			text: "确认写入",
+			attr: { type: "button" }
+		});
+
+		cancelButton.addEventListener("click", () => this.dismiss(false));
+		confirmButton.addEventListener("click", () => this.dismiss(true));
+		document.addEventListener("keydown", this.keydownHandler, true);
+		window.setTimeout(() => confirmButton.focus({ preventScroll: true }), 0);
+	}
+
+	onClose(): void {
+		document.removeEventListener("keydown", this.keydownHandler, true);
+		this.modalEl.removeClass("hermes-chat-review-modal-shell");
+		this.contentEl.removeClass("hermes-chat-review-modal");
+		this.contentEl.empty();
+		this.finish(false);
+	}
+
+	private dismiss(approved: boolean): void {
+		this.finish(approved);
+		this.close();
+	}
+
+	private finish(approved: boolean): void {
+		if (this.didResolve) {
+			return;
+		}
+		this.didResolve = true;
+		this.resolve(approved);
+	}
+
+	private getDiffLineClass(line: string): string {
+		if (line.startsWith("+++") || line.startsWith("---")) {
+			return "is-file";
+		}
+		if (line.startsWith("@@")) {
+			return "is-hunk";
+		}
+		if (line.startsWith("+")) {
+			return "is-add";
+		}
+		if (line.startsWith("-")) {
+			return "is-remove";
+		}
+		return "is-context";
+	}
+}
+
 class HermesSidebarSettingTab extends PluginSettingTab {
 	private plugin: HermesSidebarPlugin;
 
@@ -2892,6 +3113,7 @@ function runHermesBridge(input: {
 	systemPrompt: string;
 	pathPrefix: string;
 	onEvent?: (event: HermesBridgeEvent) => void;
+	onWriteReview?: (review: HermesWriteReviewRequest) => Promise<boolean>;
 }): HermesBridgeRun {
 	const binaryDir = input.binary.includes("/") ? dirname(input.binary) : "";
 	const pythonCommand = binaryDir ? join(binaryDir, "python") : "python";
@@ -2929,9 +3151,58 @@ function runHermesBridge(input: {
 		let stderrBuffer = "";
 		let settled = false;
 		let finalResult: HermesRunResult | null = null;
+		const sendControlMessage = (payload: HermesBridgeControlMessage) => {
+			if (!child?.stdin || child.killed) {
+				return;
+			}
+			try {
+				child.stdin.write(`${JSON.stringify(payload)}\n`);
+			} catch {
+				// Ignore late pipe closure.
+			}
+		};
 
 		const handleEvent = (event: HermesBridgeEvent) => {
 			if (!event || typeof event !== "object") {
+				return;
+			}
+
+			if (event.type === "write_review") {
+				const requestId = event.requestId?.trim();
+				if (!requestId) {
+					return;
+				}
+				input.onEvent?.({
+					type: "status",
+					text: `等待确认写入 ${basename(event.filePath || "文件")}`
+				});
+				void (async () => {
+					const approved = input.onWriteReview
+						? await input.onWriteReview({
+								requestId,
+								toolName: event.toolName,
+								title: event.title,
+								meta: event.meta,
+								filePath: event.filePath,
+								diff: event.diff
+						  })
+						: false;
+					sendControlMessage({
+						type: "write_review_response",
+						requestId,
+						approved
+					});
+					input.onEvent?.({
+						type: "status",
+						text: approved ? "已确认写入，Hermes 继续执行" : "已取消这次写入"
+					});
+				})().catch(() => {
+					sendControlMessage({
+						type: "write_review_response",
+						requestId,
+						approved: false
+					});
+				});
 				return;
 			}
 
@@ -3035,8 +3306,7 @@ function runHermesBridge(input: {
 		};
 
 		try {
-			child.stdin?.write(JSON.stringify(payload));
-			child.stdin?.end();
+			child.stdin?.write(`${JSON.stringify(payload)}\n`);
 		} catch (error) {
 			if (!settled) {
 				settled = true;
@@ -3085,6 +3355,13 @@ function buildHermesSystemPrompt(
 	const progressInstruction = buildHermesInterimGuidance(runtime);
 
 	return trimmed ? `${trimmed}\n\n${progressInstruction}` : progressInstruction;
+}
+
+function normalizeContextMode(value?: string | null): ContextMode {
+	const normalized = (value || "").trim();
+	return HERMES_CONTEXT_MODE_OPTIONS.some((option) => option.value === normalized)
+		? (normalized as ContextMode)
+		: "auto";
 }
 
 function resolveBridgeScriptPath(app: App, manifestDir: string): string {

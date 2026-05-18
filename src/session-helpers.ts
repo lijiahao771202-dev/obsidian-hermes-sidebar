@@ -23,6 +23,30 @@ export interface BridgeUsageSummaryLike {
 	cacheHitRate?: number | null;
 }
 
+export type ContextMode = "auto" | "selection" | "note" | "manual";
+
+export interface LiveContextLike {
+	noteTitle?: string;
+	notePath?: string;
+	selectionText?: string;
+	noteContext?: string;
+}
+
+export interface ContextHealthInput {
+	sessionId?: string;
+	contextMode: ContextMode;
+	pendingContextCount: number;
+	pendingImageCount: number;
+	queueCount: number;
+	liveContext: LiveContextLike;
+	usage?: BridgeUsageSummaryLike;
+}
+
+export interface ContextHealthItem {
+	label: string;
+	value: string;
+}
+
 export interface SelectionSourceInput {
 	mode?: string | null;
 	editorSelection?: string | null;
@@ -75,7 +99,8 @@ export type BridgeEventRenderType =
 	| "delta"
 	| "segment_break"
 	| "final"
-	| "error";
+	| "error"
+	| "write_review";
 
 export interface ActivityTimelineEntryLike {
 	status?: string | null;
@@ -187,6 +212,73 @@ export function formatBridgeConnectionStatus(
 	}
 	const calls = typeof usage.apiCalls === "number" && usage.apiCalls > 0 ? ` · ${usage.apiCalls} calls` : "";
 	return `${sessionLabel} · cache ${usage.cacheHitRate}%${calls}`;
+}
+
+export function getContextModeDescription(mode: ContextMode): string {
+	switch (mode) {
+		case "selection":
+			return "选区优先";
+		case "note":
+			return "当前笔记";
+		case "manual":
+			return "手动";
+		case "auto":
+		default:
+			return "自动";
+	}
+}
+
+export function pickLiveContextForMode(liveContext: LiveContextLike, mode: ContextMode): LiveContextLike {
+	const titleContext = {
+		noteTitle: liveContext.noteTitle,
+		notePath: liveContext.notePath
+	};
+	if (mode === "manual") {
+		return {};
+	}
+	if (mode === "note") {
+		return removeEmptyLiveContext(titleContext);
+	}
+	if (mode === "selection" || (mode === "auto" && liveContext.selectionText)) {
+		return removeEmptyLiveContext({
+			...titleContext,
+			selectionText: liveContext.selectionText,
+			noteContext: liveContext.noteContext
+		});
+	}
+	return removeEmptyLiveContext(titleContext);
+}
+
+export function buildContextHealthItems(input: ContextHealthInput): ContextHealthItem[] {
+	const sessionValue = input.sessionId ? formatSelectionPreview(input.sessionId, 32) : "未连接";
+	const cacheValue =
+		input.usage && typeof input.usage.cacheHitRate === "number"
+			? `${input.usage.cacheHitRate}%${input.usage.apiCalls ? ` · ${input.usage.apiCalls} calls` : ""}`
+			: "等待下一次回复";
+	const contextParts = [
+		getContextModeDescription(input.contextMode),
+		input.liveContext.noteTitle,
+		input.liveContext.selectionText ? `选区 ${input.liveContext.selectionText.trim().length} 字` : "",
+		input.liveContext.noteContext ? `附近上下文 ${input.liveContext.noteContext.trim().length} 字` : ""
+	].filter(Boolean);
+	const pendingParts = [
+		input.pendingContextCount > 0 ? `${input.pendingContextCount} 段上下文` : "",
+		input.pendingImageCount > 0 ? `${input.pendingImageCount} 张图片` : "",
+		input.queueCount > 0 ? `${input.queueCount} 条排队` : ""
+	].filter(Boolean);
+
+	return [
+		{ label: "Session", value: sessionValue },
+		{ label: "Cache", value: cacheValue },
+		{ label: "Context", value: contextParts.join(" · ") || "无实时上下文" },
+		{ label: "Pending", value: pendingParts.join(" · ") || "无待发送附件" }
+	];
+}
+
+function removeEmptyLiveContext(input: LiveContextLike): LiveContextLike {
+	return Object.fromEntries(
+		Object.entries(input).filter(([, value]) => typeof value === "string" && value.trim())
+	) as LiveContextLike;
 }
 
 export function pickSelectionText(input: SelectionSourceInput): string {
