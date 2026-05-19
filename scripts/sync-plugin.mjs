@@ -1,8 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(readFileSync(join(repoRoot, "manifest.json"), "utf8"));
 const pluginId = manifest.id;
 
@@ -14,6 +16,56 @@ const REQUIRED_FILES = [
 	"hermes_bridge.py",
 	"hermes-avatar.png"
 ];
+
+function collectBuildInputs(directory) {
+	if (!existsSync(directory)) {
+		return [];
+	}
+
+	const files = [];
+	for (const entry of readdirSync(directory, { withFileTypes: true })) {
+		const fullPath = join(directory, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...collectBuildInputs(fullPath));
+			continue;
+		}
+
+		if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {
+			continue;
+		}
+
+		files.push(fullPath);
+	}
+
+	return files;
+}
+
+function ensureBuiltPluginIsFresh() {
+	const buildOutput = join(repoRoot, "main.js");
+	const buildInputs = [
+		join(repoRoot, "esbuild.config.mjs"),
+		join(repoRoot, "tsconfig.json"),
+		...collectBuildInputs(join(repoRoot, "src"))
+	];
+
+	const buildOutputMtime = existsSync(buildOutput) ? statSync(buildOutput).mtimeMs : 0;
+	const latestInputMtime = Math.max(...buildInputs.map((filePath) => statSync(filePath).mtimeMs), 0);
+
+	if (buildOutputMtime >= latestInputMtime) {
+		return;
+	}
+
+	console.log("Detected newer source files than main.js. Running npm run build before sync...");
+	const result = spawnSync("npm", ["run", "build"], {
+		cwd: repoRoot,
+		stdio: "inherit",
+		shell: process.platform === "win32"
+	});
+
+	if (result.status !== 0) {
+		throw new Error(`Build failed with exit code ${result.status ?? "unknown"}.`);
+	}
+}
 
 function expandHome(path) {
 	return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
@@ -68,6 +120,8 @@ function detectPluginDir() {
 }
 
 function syncPlugin() {
+	ensureBuiltPluginIsFresh();
+
 	const targetDir = detectPluginDir();
 	mkdirSync(targetDir, { recursive: true });
 

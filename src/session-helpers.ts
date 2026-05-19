@@ -20,6 +20,10 @@ export interface SessionSnapshotInput<Message = unknown> {
 
 export interface BridgeUsageSummaryLike {
 	apiCalls?: number;
+	inputTokens?: number;
+	lastPromptTokens?: number;
+	contextLength?: number;
+	contextPercent?: number;
 	cacheHitRate?: number | null;
 }
 
@@ -95,6 +99,7 @@ export interface MessageKindLike extends MessageIdLike {
 export type BridgeEventRenderType =
 	| "status"
 	| "activity"
+	| "write_trace"
 	| "progress"
 	| "delta"
 	| "segment_break"
@@ -147,7 +152,7 @@ export function getActivityChainTailVisibleCount<T extends ActivityMessageLike>(
 	});
 	const latestVisibleEntry = visibleEntries.length > 0 ? visibleEntries[visibleEntries.length - 1] : null;
 
-	return latestVisibleEntry?.toolName === "thinking" ? 2 : 1;
+	return latestVisibleEntry?.toolName === "thinking" || latestVisibleEntry?.toolName === "write_trace" ? 2 : 1;
 }
 
 export function formatSelectionPreview(text: string, maxLength = 48): string {
@@ -214,6 +219,20 @@ export function formatBridgeConnectionStatus(
 	return `${sessionLabel} · cache ${usage.cacheHitRate}%${calls}`;
 }
 
+export function formatTokenCount(value: number): string {
+	if (!Number.isFinite(value)) {
+		return "0";
+	}
+	return Math.max(0, Math.round(value)).toLocaleString("en-US");
+}
+
+export function formatUsageInputTokens(usage?: BridgeUsageSummaryLike): string {
+	if (!usage || typeof usage.inputTokens !== "number") {
+		return "等待下一次回复";
+	}
+	return `${formatTokenCount(usage.inputTokens)} tokens`;
+}
+
 export function getContextModeDescription(mode: ContextMode): string {
 	switch (mode) {
 		case "selection":
@@ -256,7 +275,6 @@ export function buildContextHealthItems(input: ContextHealthInput): ContextHealt
 			? `${input.usage.cacheHitRate}%${input.usage.apiCalls ? ` · ${input.usage.apiCalls} calls` : ""}`
 			: "等待下一次回复";
 	const contextParts = [
-		getContextModeDescription(input.contextMode),
 		input.liveContext.noteTitle,
 		input.liveContext.selectionText ? `选区 ${input.liveContext.selectionText.trim().length} 字` : "",
 		input.liveContext.noteContext ? `附近上下文 ${input.liveContext.noteContext.trim().length} 字` : ""
@@ -327,7 +345,7 @@ export function shouldDeferScrollRestore(input: ScrollRestoreInput): boolean {
 }
 
 export function canUpdateBridgeEventWithoutFullRender(type: BridgeEventRenderType): boolean {
-	return type === "status" || type === "activity" || type === "progress" || type === "delta";
+	return type === "status" || type === "activity" || type === "write_trace" || type === "progress" || type === "delta";
 }
 
 export function shouldShowActivityEntry(toolName?: string | null): boolean {
@@ -417,6 +435,9 @@ export function shouldMergeActivityEntry(
 		return false;
 	}
 	if (toolName === "thinking") {
+		return currentStatus === "running" && incomingStatus === "running";
+	}
+	if (toolName === "write_trace") {
 		return currentStatus === "running" && incomingStatus === "running";
 	}
 	if (incomingStatus === "done" || incomingStatus === "error") {

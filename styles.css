@@ -1095,6 +1095,51 @@
 	word-break: break-word;
 }
 
+.hermes-sidebar-write-trace-preview {
+	margin-top: 5px;
+	padding: 8px 9px;
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
+	border-left: 2px solid color-mix(in srgb, var(--interactive-accent) 52%, var(--background-modifier-border));
+	border-radius: 0 7px 7px 0;
+	background: color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary));
+	color: var(--text-normal);
+	font-size: 11px;
+	line-height: 1.45;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.hermes-sidebar-write-review-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 7px;
+	margin-top: 8px;
+}
+
+.hermes-sidebar-write-review-button {
+	min-height: 30px;
+	padding: 0 10px;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 78%, transparent);
+	border-radius: 8px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: 11px;
+	font-weight: 650;
+	cursor: pointer;
+}
+
+.hermes-sidebar-write-review-button:hover {
+	border-color: color-mix(in srgb, var(--interactive-accent) 34%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
+	color: var(--text-normal);
+}
+
+.hermes-sidebar-write-review-button.is-accept {
+	border-color: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	color: var(--text-normal);
+}
+
 .hermes-sidebar-run-step-meta {
 	margin-top: 2px;
 	color: var(--text-faint);
@@ -1236,43 +1281,91 @@
 }
 
 .hermes-chat-review-diff {
-	min-height: 280px;
-	max-height: min(58vh, 620px);
+	min-height: 160px;
+	max-height: min(34vh, 360px);
 	overflow: auto;
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 74%, transparent);
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--background-primary) 97%, var(--background-secondary));
+	box-shadow: none;
+}
+
+.hermes-chat-review-rendered {
+	display: grid;
+	gap: 8px;
+	min-height: 220px;
+	max-height: min(44vh, 520px);
+	overflow: auto;
+	padding: 14px 16px;
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
 	border-radius: 14px;
 	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 96%, transparent), color-mix(in srgb, var(--background-secondary) 48%, var(--background-primary)));
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+		radial-gradient(circle at 14% 0%, color-mix(in srgb, var(--interactive-accent) 9%, transparent), transparent 32%),
+		color-mix(in srgb, var(--background-primary) 98%, var(--background-secondary));
+	box-shadow:
+		0 16px 38px rgba(15, 23, 42, 0.055),
+		inset 0 1px 0 color-mix(in srgb, white 34%, transparent);
+}
+
+.hermes-chat-review-rendered-label {
+	width: fit-content;
+	padding: 3px 8px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--interactive-accent) 9%, var(--background-primary));
+	color: color-mix(in srgb, var(--interactive-accent) 70%, var(--text-muted));
+	font-size: 10.5px;
+	font-weight: 760;
+	line-height: 1.35;
+}
+
+.hermes-chat-review-rendered-body {
+	color: var(--text-normal);
+	font-family: var(--font-text);
+	font-size: 14px;
+	line-height: 1.68;
+}
+
+.hermes-chat-review-rendered-body > :first-child {
+	margin-top: 0;
+}
+
+.hermes-chat-review-rendered-body > :last-child {
+	margin-bottom: 0;
+}
+
+.hermes-chat-review-rendered-hint {
+	color: var(--text-faint);
+	font-size: 11px;
+	line-height: 1.4;
 }
 
 .hermes-chat-review-line {
-	padding: 0 12px;
+	padding: 0 10px;
 	color: var(--text-normal);
 	font-family: var(--font-monospace);
 	font-size: 12px;
-	line-height: 1.62;
+	line-height: 1.55;
 	white-space: pre;
 }
 
 .hermes-chat-review-line.is-file {
 	color: var(--text-muted);
-	background: color-mix(in srgb, var(--background-secondary) 58%, transparent);
+	background: color-mix(in srgb, var(--background-secondary) 42%, transparent);
 }
 
 .hermes-chat-review-line.is-hunk {
-	color: color-mix(in srgb, var(--interactive-accent) 74%, var(--text-normal));
-	background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
+	color: color-mix(in srgb, var(--interactive-accent) 68%, var(--text-normal));
+	background: color-mix(in srgb, var(--interactive-accent) 6%, transparent);
 }
 
 .hermes-chat-review-line.is-add {
-	color: color-mix(in srgb, #0f6b41 72%, var(--text-normal));
-	background: color-mix(in srgb, #22c55e 12%, transparent);
+	color: var(--text-normal);
+	background: color-mix(in srgb, var(--interactive-accent) 6%, transparent);
 }
 
 .hermes-chat-review-line.is-remove {
-	color: color-mix(in srgb, #a11b1b 74%, var(--text-normal));
-	background: color-mix(in srgb, #ef4444 11%, transparent);
+	color: color-mix(in srgb, var(--text-error) 76%, var(--text-normal));
+	background: color-mix(in srgb, var(--text-error) 6%, transparent);
 }
 
 .hermes-chat-review-line.is-context {
@@ -1285,80 +1378,207 @@
 	gap: 8px;
 }
 
+.modal.hermes-chat-review-modal-shell.is-inline-confirm {
+	width: min(440px, calc(100vw - 32px));
+}
+
+.hermes-chat-review-modal.is-inline-confirm {
+	min-height: auto;
+}
+
+.hermes-chat-inline-review-modal-note {
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 16%, var(--background-modifier-border));
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--interactive-accent) 5%, var(--background-primary));
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+
 .hermes-chat-inline-review-card {
-	margin: 10px 0 8px;
-	padding: 12px;
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 24%, var(--background-modifier-border));
-	border-radius: 12px;
+	display: grid;
+	gap: 7px;
+	max-width: min(760px, calc(100% - 10px));
+	margin: 4px 4px 8px;
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 18%, var(--background-modifier-border));
+	border-radius: 10px;
 	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 94%, transparent), color-mix(in srgb, var(--background-secondary) 44%, var(--background-primary))),
-		var(--background-primary);
-	box-shadow: 0 12px 30px rgba(15, 23, 42, 0.1);
+		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 98%, var(--background-secondary)), color-mix(in srgb, var(--interactive-accent) 3%, var(--background-primary)));
+	box-shadow: 0 10px 26px rgba(15, 23, 42, 0.055);
+}
+
+.hermes-chat-inline-review-card.is-writing {
+	border-color: color-mix(in srgb, var(--interactive-accent) 36%, var(--background-modifier-border));
+	box-shadow:
+		0 12px 30px rgba(15, 23, 42, 0.075),
+		0 0 0 1px color-mix(in srgb, var(--interactive-accent) 8%, transparent);
 }
 
 .hermes-chat-inline-review-title {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
 	color: var(--text-normal);
-	font-size: 13px;
-	font-weight: 760;
-	line-height: 1.35;
+	font-size: 12.5px;
+	font-weight: 700;
+	line-height: 1.3;
+}
+
+.hermes-chat-inline-review-status {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 22px;
+	padding: 0 8px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+	color: color-mix(in srgb, var(--interactive-accent) 74%, var(--text-normal));
+	font-size: 10.5px;
+	font-weight: 750;
+	white-space: nowrap;
 }
 
 .hermes-chat-inline-review-meta {
-	margin-top: 3px;
 	color: var(--text-muted);
-	font-size: 11px;
+	font-size: 10.5px;
 	line-height: 1.35;
 }
 
 .hermes-chat-inline-review-path {
 	display: inline-block;
 	max-width: 100%;
-	margin-top: 7px;
-	padding: 4px 7px;
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 72%, transparent);
+	padding: 4px 8px;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 84%, transparent);
 	border-radius: 8px;
-	background: color-mix(in srgb, var(--background-secondary) 56%, var(--background-primary));
-	color: var(--text-muted);
+	background: color-mix(in srgb, var(--background-secondary) 48%, var(--background-primary));
+	color: var(--text-normal);
 	font-size: 10px;
-	line-height: 1.45;
+	line-height: 1.4;
 	white-space: pre-wrap;
 	word-break: break-word;
 }
 
-.hermes-chat-inline-review-actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	margin-top: 10px;
+.hermes-chat-inline-review-caption {
+	color: var(--text-faint);
+	font-size: 11px;
+	line-height: 1.45;
 }
 
 .cm-line.hermes-chat-inline-review-delete-line {
-	background: color-mix(in srgb, #ef4444 10%, transparent);
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--text-error) 7%, var(--background-primary));
 }
 
 .hermes-chat-inline-review-delete-text {
-	color: color-mix(in srgb, #a11b1b 72%, var(--text-normal));
+	border-radius: 4px;
+	background: transparent;
+	color: color-mix(in srgb, var(--text-error) 68%, var(--text-muted));
 	text-decoration: line-through;
-	text-decoration-thickness: 1px;
-	text-decoration-color: color-mix(in srgb, #a11b1b 58%, transparent);
+	text-decoration-thickness: 1.25px;
+	text-decoration-color: color-mix(in srgb, var(--text-error) 72%, var(--text-muted));
 }
 
 .hermes-chat-inline-review-addition {
-	margin: 3px 0 5px;
-	border-left: 3px solid color-mix(in srgb, #22c55e 64%, var(--interactive-accent));
-	border-radius: 0 8px 8px 0;
-	background: color-mix(in srgb, #22c55e 11%, transparent);
-	overflow: hidden;
+	display: block;
+	margin: 6px 0 9px;
+	padding: 10px 12px 10px 14px;
+	border-left: 2px solid color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border));
+	border-radius: 0 10px 10px 0;
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary)), color-mix(in srgb, var(--interactive-accent) 3%, var(--background-primary)));
+	box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+	overflow: visible;
+}
+
+.hermes-chat-inline-review-addition.is-active {
+	border-left-color: color-mix(in srgb, var(--interactive-accent) 68%, var(--background-modifier-border));
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--interactive-accent) 9%, var(--background-primary)), color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary)));
+}
+
+.hermes-chat-inline-review-addition.is-done {
+	border-left-color: color-mix(in srgb, var(--interactive-accent) 54%, var(--background-modifier-border));
+}
+
+.hermes-chat-inline-review-add-marker {
+	margin-bottom: 5px;
+	color: color-mix(in srgb, var(--interactive-accent) 58%, var(--text-muted));
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0;
+	line-height: 1.2;
+}
+
+.hermes-chat-inline-review-add-source {
+	color: var(--text-normal);
+	font-family: var(--font-text);
+	font-size: 13.5px;
+	line-height: 1.62;
+	white-space: normal;
+	word-break: break-word;
+}
+
+.hermes-chat-inline-review-add-placeholder {
+	color: var(--text-faint);
+}
+
+.hermes-chat-inline-review-add-markdown {
+	color: var(--text-normal);
+}
+
+.hermes-chat-inline-review-add-markdown > :first-child {
+	margin-top: 0;
+}
+
+.hermes-chat-inline-review-add-markdown > :last-child {
+	margin-bottom: 0;
+}
+
+.hermes-chat-inline-review-add-partial {
+	margin-top: 8px;
+	color: var(--text-faint);
+	font-size: 10.5px;
+	line-height: 1.35;
+}
+
+.hermes-chat-inline-review-caret-line {
+	margin-top: 4px;
+	height: 1.2em;
 }
 
 .hermes-chat-inline-review-add-line {
-	padding: 2px 10px;
-	color: color-mix(in srgb, #0f6b41 74%, var(--text-normal));
-	font-family: var(--font-monospace);
-	font-size: 12px;
-	line-height: 1.55;
-	white-space: pre-wrap;
-	word-break: break-word;
+	position: relative;
+	padding-right: 10px;
+}
+
+.hermes-chat-inline-review-add-line.is-active {
+	color: var(--text-normal);
+	background: linear-gradient(90deg, color-mix(in srgb, var(--interactive-accent) 7%, transparent), transparent 78%);
+}
+
+.hermes-chat-inline-review-caret {
+	display: inline-block;
+	width: 1.5px;
+	height: 1.2em;
+	margin-left: 2px;
+	vertical-align: -0.2em;
+	background: color-mix(in srgb, var(--interactive-accent) 82%, var(--text-normal));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+	animation: hermes-inline-caret-blink 1s steps(1, end) infinite;
+}
+
+@keyframes hermes-inline-caret-blink {
+	0%,
+	48% {
+		opacity: 1;
+	}
+	50%,
+	100% {
+		opacity: 0.25;
+	}
 }
 
 .hermes-sidebar-composer {
@@ -1872,9 +2092,9 @@
 }
 
 .hermes-inline-control.is-accept {
-	border-color: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border));
-	background: color-mix(in srgb, var(--interactive-accent) 88%, var(--text-normal) 12%);
-	color: var(--text-on-accent);
+	border-color: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+	color: var(--text-normal);
 }
 
 .hermes-inline-followup {

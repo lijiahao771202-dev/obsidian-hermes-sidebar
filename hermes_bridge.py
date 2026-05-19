@@ -50,7 +50,7 @@ def ensure_hermes_agent_root_on_path() -> Path:
 class BridgeControlChannel:
     def __init__(self, stream: Any):
         self._stream = stream
-        self._responses: dict[str, bool] = {}
+        self._responses: dict[str, dict[str, bool]] = {}
         self._closed = False
         self._condition = threading.Condition()
         self._reader = threading.Thread(target=self._read_loop, name="hermes-bridge-control", daemon=True)
@@ -72,21 +72,22 @@ class BridgeControlChannel:
                 if not request_id:
                     continue
                 approved = bool(payload.get("approved"))
+                applied_by_client = bool(payload.get("appliedByClient"))
                 with self._condition:
-                    self._responses[request_id] = approved
+                    self._responses[request_id] = {"approved": approved, "applied_by_client": applied_by_client}
                     self._condition.notify_all()
         finally:
             with self._condition:
                 self._closed = True
                 self._condition.notify_all()
 
-    def wait_for_write_review(self, request_id: str) -> bool:
+    def wait_for_write_review(self, request_id: str) -> dict[str, bool]:
         with self._condition:
             while request_id not in self._responses and not self._closed:
                 self._condition.wait(timeout=0.25)
             if request_id in self._responses:
                 return self._responses.pop(request_id)
-            return False
+            return {"approved": False, "applied_by_client": False}
 
 
 def clamp_write_review_diff(diff_text: str, *, max_length: int = WRITE_REVIEW_DIFF_MAX_CHARACTERS) -> str:
@@ -120,6 +121,49 @@ def count_diff_changes(diff_text: str) -> tuple[int, int]:
         elif line.startswith("-"):
             deletions += 1
     return additions, deletions
+
+
+def extract_added_markdown_preview(diff_text: str, *, max_lines: int = 16) -> str:
+    lines: list[str] = []
+    for line in str(diff_text or "").splitlines():
+        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+            continue
+        if line.startswith("+"):
+            lines.append(line[1:])
+        if len(lines) >= max_lines:
+            break
+    return "\n".join(lines).strip()
+
+
+def build_write_trace_events(review: dict[str, Any], *, phase: str = "preview") -> list[dict[str, Any]]:
+    tool_name = str(review.get("toolName") or "write").strip()
+    file_path = str(review.get("filePath") or "").strip()
+    meta = str(review.get("meta") or "").strip()
+    added_preview = extract_added_markdown_preview(str(review.get("diff") or ""))
+    target = Path(file_path).name if file_path and "," not in file_path else file_path or "文件"
+    events = [
+        {
+            "type": "write_trace",
+            "eventType": f"write.{phase}.start",
+            "toolName": "write_trace",
+            "status": "running",
+            "text": f"正在生成修改预览：{target}",
+            "preview": "\n".join(
+                part for part in [f"目标：{file_path}" if file_path else "", meta, added_preview] if part
+            ),
+        }
+    ]
+    events.append(
+        {
+            "type": "write_trace",
+            "eventType": f"write.{phase}.review",
+            "toolName": "write_trace",
+            "status": "running",
+            "text": f"等待确认写入：{target}",
+            "preview": f"{tool_name} · {meta}" if meta else tool_name,
+        }
+    )
+    return events
 
 
 def format_write_review_meta(*, tool_name: str, file_count: int, additions: int, deletions: int) -> str:
@@ -309,6 +353,8 @@ def install_write_review_handlers(control_channel: BridgeControlChannel | None) 
             if review.get("error"):
                 return json.dumps({"error": review["error"]}, ensure_ascii=False)
             request_id = f"write-review-{next(_WRITE_REVIEW_REQUEST_IDS)}"
+            for trace_event in build_write_trace_events(review):
+                emit(trace_event)
             emit(
                 {
                     "type": "write_review",
@@ -320,10 +366,55 @@ def install_write_review_handlers(control_channel: BridgeControlChannel | None) 
                     "diff": review.get("diff"),
                 }
             )
-            approved = control_channel.wait_for_write_review(request_id)
+            review_response = control_channel.wait_for_write_review(request_id)
+            approved = bool(review_response.get("approved"))
+            applied_by_client = bool(review_response.get("applied_by_client"))
             if not approved:
+                emit(
+                    {
+                        "type": "write_trace",
+                        "eventType": "write.review.cancel",
+                        "toolName": "write_trace",
+                        "status": "error",
+                        "text": "已取消这次写入",
+                        "preview": str(review.get("filePath") or ""),
+                    }
+                )
                 return json.dumps({"error": "User canceled the file write after reviewing the diff."}, ensure_ascii=False)
-            return __original(args, **kwargs)
+            if applied_by_client:
+                emit(
+                    {
+                        "type": "write_trace",
+                        "eventType": "write.review.done",
+                        "toolName": "write_trace",
+                        "status": "done",
+                        "text": "写入已完成",
+                        "preview": str(review.get("filePath") or ""),
+                    }
+                )
+                return json.dumps({"success": True, "applied_by_client": True}, ensure_ascii=False)
+            emit(
+                {
+                    "type": "write_trace",
+                    "eventType": "write.review.approved",
+                    "toolName": "write_trace",
+                    "status": "running",
+                    "text": "已确认，正在写入文件",
+                    "preview": str(review.get("filePath") or ""),
+                }
+            )
+            result = __original(args, **kwargs)
+            emit(
+                {
+                    "type": "write_trace",
+                    "eventType": "write.review.done",
+                    "toolName": "write_trace",
+                    "status": "done",
+                    "text": "写入已完成",
+                    "preview": str(review.get("filePath") or ""),
+                }
+            )
+            return result
 
         setattr(_wrapped, "_is_write_review_wrapper", True)
         entry.handler = _wrapped
@@ -507,6 +598,16 @@ def summarize_tool_args(tool_name: str, args: Any, preview: str) -> str:
         query = args.get("query") or args.get("filter")
         return f"filter={compact_preview(query, max_length=72)}" if query else "读取可用 skills"
 
+    if tool_name == "patch":
+        path = args.get("path")
+        if path:
+            return f"准备修改 {compact_preview(path, max_length=96)}"
+        return "准备生成修改预览"
+
+    if tool_name == "write_file":
+        path = args.get("path")
+        return f"准备写入 {compact_preview(path, max_length=96)}" if path else "准备写入文件"
+
     for key in ("query", "path", "file", "name", "command", "url", "image_url", "prompt"):
         value = args.get(key)
         if value:
@@ -567,12 +668,18 @@ def pick_bridge_final_text(
     return candidates[0] if candidates else ""
 
 
-def build_usage_summary(result: dict[str, Any]) -> dict[str, int | None]:
+def build_usage_summary(result: dict[str, Any]) -> dict[str, int | float | None]:
     input_tokens = int(result.get("input_tokens") or 0)
     cache_read_tokens = int(result.get("cache_read_tokens") or 0)
+    last_prompt_tokens = int(result.get("last_prompt_tokens") or 0)
+    context_length = int(result.get("context_length") or 0)
+    context_percent = min(100, round((last_prompt_tokens / context_length) * 100)) if context_length > 0 else None
     return {
         "apiCalls": int(result.get("api_calls") or 0),
         "inputTokens": input_tokens,
+        "lastPromptTokens": last_prompt_tokens,
+        "contextLength": context_length if context_length > 0 else None,
+        "contextPercent": context_percent,
         "cacheReadTokens": cache_read_tokens,
         "cacheWriteTokens": int(result.get("cache_write_tokens") or 0),
         "cacheHitRate": round((cache_read_tokens / input_tokens) * 100) if input_tokens > 0 else None,

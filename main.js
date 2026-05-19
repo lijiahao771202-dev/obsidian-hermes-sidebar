@@ -52,7 +52,7 @@ function getActivityChainTailVisibleCount(messages) {
     return shouldShowActivityEntry(entry.toolName);
   });
   const latestVisibleEntry = visibleEntries.length > 0 ? visibleEntries[visibleEntries.length - 1] : null;
-  return latestVisibleEntry?.toolName === "thinking" ? 2 : 1;
+  return latestVisibleEntry?.toolName === "thinking" || latestVisibleEntry?.toolName === "write_trace" ? 2 : 1;
 }
 function formatSelectionPreview(text, maxLength = 48) {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -137,7 +137,6 @@ function buildContextHealthItems(input) {
   const sessionValue = input.sessionId ? formatSelectionPreview(input.sessionId, 32) : "\u672A\u8FDE\u63A5";
   const cacheValue = input.usage && typeof input.usage.cacheHitRate === "number" ? `${input.usage.cacheHitRate}%${input.usage.apiCalls ? ` \xB7 ${input.usage.apiCalls} calls` : ""}` : "\u7B49\u5F85\u4E0B\u4E00\u6B21\u56DE\u590D";
   const contextParts = [
-    getContextModeDescription(input.contextMode),
     input.liveContext.noteTitle,
     input.liveContext.selectionText ? `\u9009\u533A ${input.liveContext.selectionText.trim().length} \u5B57` : "",
     input.liveContext.noteContext ? `\u9644\u8FD1\u4E0A\u4E0B\u6587 ${input.liveContext.noteContext.trim().length} \u5B57` : ""
@@ -194,7 +193,7 @@ function shouldDeferScrollRestore(input) {
   return input.scrollHeight - input.clientHeight < input.targetScrollTop;
 }
 function canUpdateBridgeEventWithoutFullRender(type) {
-  return type === "status" || type === "activity" || type === "progress" || type === "delta";
+  return type === "status" || type === "activity" || type === "write_trace" || type === "progress" || type === "delta";
 }
 function shouldShowActivityEntry(toolName) {
   return (toolName || "").trim() !== "run.config";
@@ -261,6 +260,9 @@ function shouldMergeActivityEntry(toolName, currentStatus, incomingStatus, curre
   if (toolName === "thinking") {
     return currentStatus === "running" && incomingStatus === "running";
   }
+  if (toolName === "write_trace") {
+    return currentStatus === "running" && incomingStatus === "running";
+  }
   if (incomingStatus === "done" || incomingStatus === "error") {
     return currentStatus === "running" && currentPreview === incomingPreview;
   }
@@ -315,6 +317,34 @@ var OBSIDIAN_CONTEXT_PREAMBLE = [
 var OBSIDIAN_CONTEXT_CLAMP_MAX_CHARACTERS = 2400;
 var OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS = 1400;
 var OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS = 800;
+var OBSIDIAN_WRITE_GUIDANCE = [
+  "Obsidian \u5199\u5165\u534F\u8BAE\uFF1A",
+  "- \u5F53\u7528\u6237\u8981\u6C42\u4FEE\u6539\u3001\u91CD\u5199\u3001\u6DA6\u8272\u3001\u4F18\u5316\u3001\u8FFD\u52A0\u3001\u5220\u9664\uFF0C\u6216\u66F4\u6539\u5F53\u524D\u6253\u5F00\u7B14\u8BB0\u3001\u7528\u6237\u9AD8\u4EAE\u9009\u533A\u3001\u5F53\u524D\u7B14\u8BB0\u4E0A\u4E0B\u6587\u3001\u4EFB\u610F vault \u6587\u4EF6\u65F6\uFF0C\u5FC5\u987B\u7528\u6587\u4EF6\u5DE5\u5177\uFF08`patch` \u6216 `write_file`\uFF09\u771F\u6B63\u5199\u5165\u3002",
+  "- \u7528\u6237\u8BF4\u201C\u8FD9\u7BC7\u201D\u201C\u5F53\u524D\u7B14\u8BB0\u201D\u201C\u9009\u4E2D\u7684\u6587\u5B57\u201D\u201C\u539F\u6587\u201D\u201C\u6539\u4E00\u4E0B\u201D\u201C\u4F18\u5316\u4E00\u4E0B\u201D\u201C\u6DA6\u8272\u201D\u7B49\uFF0C\u9ED8\u8BA4\u6307 Obsidian \u4E0A\u4E0B\u6587\u91CC\u7684 Current open note \u6216\u9009\u533A\uFF1B\u4F7F\u7528\u5176\u4E2D\u7684\u51C6\u786E\u8DEF\u5F84\u3002",
+  "- \u4F18\u5148\u4F7F\u7528 `patch` \u505A\u5C40\u90E8\u7CBE\u51C6\u7F16\u8F91\uFF1B\u53EA\u6709\u6574\u7BC7\u91CD\u5199\u3001\u65B0\u5EFA\u6587\u4EF6\u3001\u6216\u5927\u6BB5\u7ED3\u6784\u91CD\u6392\u65F6\u624D\u4F7F\u7528 `write_file`\u3002",
+  "- \u5199\u5165\u524D\u53D1\u9001\u4E00\u53E5\u7B80\u77ED\u8FDB\u5C55\uFF0C\u8BA9\u7528\u6237\u77E5\u9053\u4F60\u6B63\u5728\u5904\u7406\u54EA\u4E00\u90E8\u5206\uFF1B\u4E0D\u8981\u8F93\u51FA\u5DE5\u5177\u65E5\u5FD7\u3001\u5185\u90E8\u94FE\u8DEF\u6216\u9690\u85CF\u63A8\u7406\u3002",
+  "- \u7528\u6237\u8981\u6C42\u6587\u4EF6\u7F16\u8F91\u65F6\uFF0C\u4E0D\u8981\u5728\u6700\u7EC8\u56DE\u7B54\u91CC\u7C98\u8D34\u5B8C\u6574\u91CD\u5199\u5185\u5BB9\uFF0C\u9664\u975E\u7528\u6237\u660E\u786E\u8981\u6C42\u3002",
+  "- \u5199\u5165\u5B8C\u6210\u540E\uFF0C\u6700\u7EC8\u56DE\u7B54\u4FDD\u6301\u7B80\u77ED\uFF1A\u8BF4\u660E\u6539\u4E86\u4EC0\u4E48\u3001\u662F\u5426\u5DF2\u5E94\u7528\u3001\u6709\u6CA1\u6709\u9700\u8981\u7528\u6237\u786E\u8BA4\u7684\u98CE\u9669\u3002",
+  "",
+  "Obsidian \u5199\u4F5C\u89C4\u8303\uFF1A",
+  "- Markdown \u5FC5\u987B\u80FD\u5728 Obsidian \u4E2D\u76F4\u63A5\u9605\u8BFB\u548C\u6E32\u67D3\uFF1B\u6807\u9898\u5C42\u7EA7\u6E05\u6670\uFF0C\u5217\u8868\u4E0D\u8981\u8FC7\u6DF1\uFF0C\u8868\u683C\u53EA\u5728\u786E\u5B9E\u63D0\u5347\u53EF\u8BFB\u6027\u65F6\u4F7F\u7528\u3002",
+  "- Callout \u7528\u4E8E\u63D0\u9192\u3001\u603B\u7ED3\u3001\u8B66\u544A\u3001\u5F85\u529E\u6216\u5173\u952E\u89C2\u70B9\uFF0C\u4E0D\u8981\u6EE5\u7528\u3002",
+  "- \u4E0D\u8981\u5F3A\u884C\u4F7F\u7528 Mermaid\u3002\u666E\u901A Markdown\u3001\u5217\u8868\u3001\u8868\u683C\u3001callout \u6216\u6B63\u6587\u8868\u8FBE\u66F4\u597D\u65F6\uFF0C\u5C31\u7528\u8FD9\u4E9B\u65B9\u5F0F\u3002",
+  "- \u5982\u679C\u4EFB\u52A1\u6D89\u53CA Mermaid \u56FE\u8868\uFF0C\u8D77\u8349\u524D\u4F18\u5148\u67E5\u770B Obsidian/Mermaid \u76F8\u5173 skill\uFF0C\u4F8B\u5982 `obsidian-cli`\u3001`obsidian-markdown`\u3001`mermaid-visualizer`\u3002",
+  "- \u5F53\u4F60\u786E\u5B9E\u9009\u62E9 Mermaid \u65F6\uFF0C\u56FE\u8868\u8981\u4FDD\u5B88\u3001\u7B80\u6D01\uFF0C\u5E76\u4E14\u80FD\u901A\u8FC7 Obsidian Mermaid \u8BED\u6CD5\u89E3\u6790\uFF1B\u4E0D\u786E\u5B9A\u80FD\u89E3\u6790\u65F6\u5C31\u7B80\u5316\u3002",
+  "",
+  "Wiki \u94FE\u63A5\u89C4\u8303\uFF1A",
+  "- Wiki \u94FE\u63A5\u5E94\u8BE5\u6307\u5411\u53EF\u957F\u671F\u6C89\u6DC0\u7684\u6982\u5FF5\u3001\u4EBA\u7269\u3001\u9879\u76EE\u3001\u7406\u8BBA\u3001\u65B9\u6CD5\u6216\u4E3B\u9898\uFF0C\u4E0D\u8981\u94FE\u63A5\u666E\u901A\u8BCD\u3001\u6CDB\u8BCD\u3001\u4E00\u6B21\u6027\u8868\u8FBE\u3002",
+  "- \u4E0D\u8981\u8FC7\u5EA6\u94FE\u63A5\u3002\u6BCF\u6BB5\u4F18\u5148\u94FE\u63A5 1-3 \u4E2A\u771F\u6B63\u6709\u4EF7\u503C\u7684\u6838\u5FC3\u6982\u5FF5\uFF1B\u540C\u4E00\u6982\u5FF5\u9996\u6B21\u51FA\u73B0\u94FE\u63A5\u5373\u53EF\u3002",
+  "- \u53EA\u6709\u76EE\u6807\u7B14\u8BB0\u5DF2\u5B58\u5728\uFF0C\u6216\u4F60\u4F1A\u5728\u540C\u4E00\u6B21\u4EFB\u52A1\u4E2D\u521B\u5EFA\u5B83\uFF0C\u624D\u6DFB\u52A0\u65B0\u7684 `[[wiki]]`\u3002",
+  "- \u5982\u679C\u5F15\u5165\u5168\u65B0\u7684 wiki \u94FE\u63A5\u6982\u5FF5\uFF0C\u5FC5\u987B\u5728\u540C\u4E00\u6B21\u5199\u5165\u6D41\u7A0B\u4E2D\u521B\u5EFA\u5BF9\u5E94 Markdown \u7B14\u8BB0\uFF0C\u8BA9\u5B83\u6210\u4E3A\u53EF\u7EE7\u7EED\u751F\u957F\u7684\u77E5\u8BC6\u79CD\u5B50\uFF0C\u800C\u4E0D\u662F\u7A7A\u58F3\u3002",
+  "- \u9047\u5230\u53EF\u80FD\u91CD\u590D\u6216\u8FD1\u4E49\u7684\u6982\u5FF5\uFF0C\u4F18\u5148\u590D\u7528\u5DF2\u6709\u7B14\u8BB0\uFF1B\u4E0D\u8981\u5236\u9020\u540C\u4E49\u91CD\u590D\u7B14\u8BB0\u3002",
+  "- \u4E0D\u8981\u7559\u4E0B\u6307\u5411\u672A\u521B\u5EFA\u7B14\u8BB0\u7684\u60AC\u7A7A wiki \u94FE\u63A5\u3002",
+  "",
+  "Skill \u4F7F\u7528\uFF1A",
+  "- \u6D89\u53CA Obsidian \u6587\u4EF6\u3001Markdown\u3001Wiki\u3001\u5C5E\u6027\u3001callout\u3001embed\u3001Canvas\u3001Bases \u65F6\uFF0C\u4F18\u5148\u67E5\u770B\u76F8\u5173 Obsidian skill\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u786C\u5199\u590D\u6742\u8BED\u6CD5\u3002",
+  "- \u6D89\u53CA Mermaid \u56FE\u8868\u65F6\uFF0C\u4F18\u5148\u67E5\u770B Mermaid/Obsidian \u56FE\u8868\u76F8\u5173 skill\u3002"
+].join("\n");
 function normalizeText(text) {
   return typeof text === "string" ? text.trim() : "";
 }
@@ -352,15 +382,16 @@ function buildHermesInterimGuidance(runtime) {
   const runtimeReasoning = normalizeText(runtime?.reasoningEffort) || "default";
   return [
     `Current runtime: provider=${runtimeProvider}, model=${runtimeModel}, reasoning_effort=${runtimeReasoning}.`,
-    "If the user asks what reasoning strength is active, answer from this Current runtime line instead of guessing from your hidden internals.",
-    "For multi-step, tool-using, or longer tasks, proactively send 1-3 brief interim assistant messages to the user in natural Chinese before the final answer.",
-    "Good moments include after you finish reading important context, when you begin writing, or when your plan meaningfully changes.",
-    "Skip interim updates for very short tasks where they would feel noisy.",
-    "Use those interim messages like real progress updates someone would actually say in chat.",
-    "Keep them short, warm, and concrete.",
-    "Do not reveal chain-of-thought, raw tool logs, internal trace text, or hidden reasoning.",
-    "Keep the final answer separate from any interim progress updates."
+    "\u5982\u679C\u7528\u6237\u8BE2\u95EE\u5F53\u524D\u6A21\u578B\u6216\u63A8\u7406\u5F3A\u5EA6\uFF0C\u53EA\u80FD\u6839\u636E\u8FD9\u884C\u8FD0\u884C\u65F6\u4FE1\u606F\u56DE\u7B54\uFF1B\u4E0D\u8981\u731C\u6D4B\u9690\u85CF\u5185\u90E8\u72B6\u6001\uFF0C\u4E5F\u4E0D\u8981\u627F\u8BFA provider \u4E00\u5B9A\u4E25\u683C\u6267\u884C\u8BE5\u6863\u4F4D\u3002",
+    "\u591A\u6B65\u9AA4\u3001\u5DE5\u5177\u8C03\u7528\u6216\u8F83\u957F\u4EFB\u52A1\u4E2D\uFF0C\u5728\u6700\u7EC8\u56DE\u7B54\u524D\u4E3B\u52A8\u53D1\u9001 1-3 \u6761\u81EA\u7136\u4E2D\u6587\u8FDB\u5C55\u6D88\u606F\u3002",
+    "\u9002\u5408\u53D1\u9001\u8FDB\u5C55\u7684\u65F6\u673A\uFF1A\u8BFB\u5B8C\u5173\u952E\u4E0A\u4E0B\u6587\u3001\u5F00\u59CB\u5199\u5165\u3001\u8BA1\u5212\u660E\u663E\u53D8\u5316\u3001\u53D1\u73B0\u98CE\u9669\u3002",
+    "\u975E\u5E38\u77ED\u7684\u4EFB\u52A1\u53EF\u4EE5\u8DF3\u8FC7\u8FDB\u5C55\uFF0C\u907F\u514D\u6253\u6270\u3002",
+    "\u8FDB\u5C55\u6D88\u606F\u8981\u77ED\u3001\u5177\u4F53\u3001\u50CF\u771F\u4EBA\u534F\u4F5C\u4E2D\u7684\u540C\u6B65\uFF1B\u4E0D\u8981\u6CC4\u9732\u601D\u7EF4\u94FE\u3001\u539F\u59CB\u5DE5\u5177\u65E5\u5FD7\u3001\u5185\u90E8\u8FFD\u8E2A\u6587\u672C\u6216\u9690\u85CF\u63A8\u7406\u3002",
+    "\u6700\u7EC8\u56DE\u7B54\u8981\u548C\u4E2D\u9014\u8FDB\u5C55\u5206\u5F00\u3002"
   ].join(" ");
+}
+function buildHermesObsidianWriteGuidance() {
+  return OBSIDIAN_WRITE_GUIDANCE;
 }
 function buildTurnUserText(text, imageCount) {
   const normalized = normalizeText(text);
@@ -605,7 +636,7 @@ function buildChatWriteReviewInlinePreview(review) {
     additions
   };
 }
-function resolveChatWriteReviewTargetPath(reviewFilePath, vaultFilePaths) {
+function resolveChatWriteReviewTargetPath(reviewFilePath, vaultFilePaths, vaultRootPath) {
   const normalizedReviewPath = normalizeReviewPath(reviewFilePath);
   if (!normalizedReviewPath) {
     return null;
@@ -613,14 +644,181 @@ function resolveChatWriteReviewTargetPath(reviewFilePath, vaultFilePaths) {
   if (vaultFilePaths.includes(normalizedReviewPath)) {
     return normalizedReviewPath;
   }
-  const matches = vaultFilePaths.filter((path) => path.toLowerCase().endsWith(".md") && path.includes("/")).filter((path) => normalizedReviewPath.endsWith(`/${path}`));
+  const normalizedVaultRoot = normalizeReviewPath(vaultRootPath).replace(/\/+$/, "");
+  if (normalizedVaultRoot && normalizedReviewPath.startsWith(`${normalizedVaultRoot}/`)) {
+    const vaultRelativePath = normalizedReviewPath.slice(normalizedVaultRoot.length + 1);
+    if (vaultFilePaths.includes(vaultRelativePath)) {
+      return vaultRelativePath;
+    }
+  }
+  const matches = vaultFilePaths.filter((path) => path.toLowerCase().endsWith(".md")).filter((path) => path.includes("/")).filter((path) => normalizedReviewPath.endsWith(`/${path}`));
   if (matches.length !== 1) {
     return null;
   }
   return matches[0];
 }
+function listChatWriteReviewMarkdownTargets(review, vaultFilePaths, vaultRootPath) {
+  const candidates = [review.filePath, ...parseDiffTargetPaths(review.diff)];
+  const resolvedTargets = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of candidates) {
+    const normalized = normalizeReviewPath(candidate);
+    if (!normalized || normalized.includes(",") || !normalized.toLowerCase().endsWith(".md") || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    const resolved = resolveChatWriteReviewTargetPath(normalized, vaultFilePaths, vaultRootPath);
+    resolvedTargets.push(resolved ?? relativizeReviewPathToVault(normalized, vaultRootPath) ?? normalized);
+  }
+  return resolvedTargets.filter((path, index, source) => source.indexOf(path) === index);
+}
+function shouldAutoRevealWriteReviewTarget(reviewFilePath, resolvedTargetPath) {
+  const normalizedReviewPath = normalizeReviewPath(reviewFilePath);
+  return normalizedReviewPath.toLowerCase().endsWith(".md") && !resolvedTargetPath;
+}
+function buildChatWriteReviewAdditionMarkdown(addition) {
+  return addition.lines.join("\n");
+}
+function buildChatWriteReviewRenderedMarkdownPreview(preview, visibleCharacters) {
+  const additions = typeof visibleCharacters === "number" ? buildChatWriteReviewStreamFrame(preview, visibleCharacters).additions : null;
+  const lines = (additions ?? preview.additions).flatMap((addition) => "visibleLines" in addition ? addition.visibleLines : addition.lines).filter((line, index, source) => !(line === "" && source[index - 1] === "" && source[index + 1] === ""));
+  const text = lines.join("\n").trim();
+  return {
+    text,
+    isPartial: typeof visibleCharacters === "number" && visibleCharacters < getChatWriteReviewTotalAddedCharacters(preview)
+  };
+}
+function getChatWriteReviewTotalAddedCharacters(preview) {
+  return preview.additions.reduce((total, addition) => total + buildChatWriteReviewAdditionMarkdown(addition).length, 0);
+}
+function advanceChatWriteReviewVisibleCharacters(preview, currentVisibleCharacters, stepCharacters) {
+  const totalCharacters = getChatWriteReviewTotalAddedCharacters(preview);
+  if (totalCharacters <= 0) {
+    return 0;
+  }
+  const safeCurrent = Math.max(0, currentVisibleCharacters);
+  const safeStep = Math.max(1, stepCharacters);
+  return Math.min(totalCharacters, safeCurrent + safeStep);
+}
+function buildChatWriteReviewStreamFrame(preview, visibleCharacters) {
+  const totalCharacters = getChatWriteReviewTotalAddedCharacters(preview);
+  const clampedVisibleCharacters = Math.max(0, Math.min(totalCharacters, visibleCharacters));
+  const additions = [];
+  let remainingCharacters = clampedVisibleCharacters;
+  let activeAdditionIndex = null;
+  let activeLineIndex = null;
+  let activeDocumentLine = null;
+  preview.additions.forEach((addition, additionIndex) => {
+    const additionText = buildChatWriteReviewAdditionMarkdown(addition);
+    const visibleText = additionText.slice(0, remainingCharacters);
+    const isComplete2 = remainingCharacters >= additionText.length;
+    const visibleLines = visibleText.length > 0 ? visibleText.split("\n") : [];
+    const nextAddition = {
+      afterLine: addition.afterLine,
+      lines: addition.lines,
+      visibleLines,
+      activeLineIndex: null,
+      isActive: false,
+      isComplete: isComplete2
+    };
+    if (!isComplete2 && visibleText.length > 0 && activeAdditionIndex === null) {
+      nextAddition.isActive = true;
+      nextAddition.activeLineIndex = visibleLines.length - 1;
+      activeAdditionIndex = additionIndex;
+      activeLineIndex = nextAddition.activeLineIndex;
+      activeDocumentLine = addition.afterLine + 1 + nextAddition.activeLineIndex;
+    }
+    additions.push(nextAddition);
+    remainingCharacters = Math.max(0, remainingCharacters - additionText.length);
+  });
+  const isComplete = clampedVisibleCharacters >= totalCharacters;
+  if (!isComplete && activeAdditionIndex === null && preview.additions.length > 0) {
+    activeAdditionIndex = 0;
+    activeLineIndex = 0;
+    activeDocumentLine = preview.additions[0].afterLine + 1;
+    additions[0].isActive = true;
+    additions[0].activeLineIndex = 0;
+  }
+  return {
+    additions,
+    activeAdditionIndex,
+    activeLineIndex,
+    activeDocumentLine,
+    visibleCharacters: clampedVisibleCharacters,
+    totalCharacters,
+    isComplete
+  };
+}
+function buildChatWriteReviewDocumentFrame(preview, originalText, visibleCharacters) {
+  const streamFrame = buildChatWriteReviewStreamFrame(preview, visibleCharacters);
+  const originalLines = originalText.split("\n");
+  const additionsByAfterLine = /* @__PURE__ */ new Map();
+  for (const addition of streamFrame.additions) {
+    const existing = additionsByAfterLine.get(addition.afterLine) ?? [];
+    existing.push(addition);
+    additionsByAfterLine.set(addition.afterLine, existing);
+  }
+  const deletedLines = /* @__PURE__ */ new Set();
+  for (const deletion of preview.deletions) {
+    for (let lineIndex = deletion.fromLine; lineIndex <= deletion.toLine; lineIndex += 1) {
+      deletedLines.add(lineIndex);
+    }
+  }
+  const outputLines = [];
+  let activeOutputLine = 0;
+  const pushAdditions = (afterLine) => {
+    for (const addition of additionsByAfterLine.get(afterLine) ?? []) {
+      const lineStart = outputLines.length;
+      outputLines.push(...addition.visibleLines);
+      if (addition.isActive && addition.visibleLines.length > 0) {
+        activeOutputLine = lineStart + Math.max(0, addition.activeLineIndex ?? addition.visibleLines.length - 1);
+      }
+    }
+  };
+  pushAdditions(-1);
+  for (let lineIndex = 0; lineIndex < originalLines.length; lineIndex += 1) {
+    if (!deletedLines.has(lineIndex)) {
+      outputLines.push(originalLines[lineIndex]);
+    }
+    pushAdditions(lineIndex);
+  }
+  const text = outputLines.join("\n");
+  const safeActiveLine = Math.max(0, Math.min(outputLines.length - 1, activeOutputLine));
+  const activeOffset = outputLines.length === 0 ? 0 : outputLines.slice(0, safeActiveLine).join("\n").length + (safeActiveLine > 0 ? 1 : 0) + (outputLines[safeActiveLine]?.length ?? 0);
+  return {
+    text,
+    activeOffset: Math.max(0, Math.min(text.length, activeOffset)),
+    visibleCharacters: streamFrame.visibleCharacters,
+    totalCharacters: streamFrame.totalCharacters,
+    isComplete: streamFrame.isComplete
+  };
+}
 function normalizeReviewPath(path) {
   return (path ?? "").trim().replace(/\\/g, "/");
+}
+function parseDiffTargetPaths(diff) {
+  const targets = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const line of String(diff ?? "").split("\n")) {
+    const match = /^\+\+\+\s+(?:b\/)?(.+)$/.exec(line.trim());
+    if (!match) {
+      continue;
+    }
+    const candidate = normalizeReviewPath(match[1]);
+    if (!candidate || candidate === "/dev/null" || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    targets.push(candidate);
+  }
+  return targets;
+}
+function relativizeReviewPathToVault(reviewPath, vaultRootPath) {
+  const normalizedVaultRoot = normalizeReviewPath(vaultRootPath).replace(/\/+$/, "");
+  if (!normalizedVaultRoot || !reviewPath.startsWith(`${normalizedVaultRoot}/`)) {
+    return null;
+  }
+  return reviewPath.slice(normalizedVaultRoot.length + 1);
 }
 
 // src/inline-edit-helpers.ts
@@ -2350,6 +2548,191 @@ function cleanInlineProposal(text) {
   return text.replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/i, "").trim();
 }
 
+// src/mermaid-helpers.ts
+var MERMAID_FENCE_START = /^```mermaid\s*$/i;
+var FENCE_END = /^```\s*$/;
+async function collectMermaidValidationProblems(markdown, loadMermaidRuntime) {
+  const fences = extractMermaidFences(markdown);
+  if (fences.length === 0) {
+    return [];
+  }
+  const runtime = await loadMermaidRuntime();
+  const parse = runtime?.parse;
+  const problems = [];
+  for (const fence of fences) {
+    if (!fence.closed) {
+      problems.push({
+        index: fence.index,
+        code: fence.code,
+        message: "Unclosed mermaid code fence."
+      });
+      continue;
+    }
+    if (typeof parse !== "function") {
+      problems.push({
+        index: fence.index,
+        code: fence.code,
+        message: "Mermaid runtime is unavailable."
+      });
+      continue;
+    }
+    try {
+      await Promise.resolve(parse.call(runtime, fence.code));
+    } catch (error) {
+      problems.push({
+        index: fence.index,
+        code: fence.code,
+        message: stringifyMermaidError(error)
+      });
+    }
+  }
+  return problems;
+}
+function extractMermaidFences(markdown) {
+  const lines = String(markdown ?? "").split("\n");
+  const fences = [];
+  let insideFence = false;
+  let currentLines = [];
+  let currentIndex = 0;
+  for (const line of lines) {
+    if (!insideFence) {
+      if (MERMAID_FENCE_START.test(line.trim())) {
+        insideFence = true;
+        currentLines = [];
+        currentIndex = fences.length;
+      }
+      continue;
+    }
+    if (FENCE_END.test(line.trim())) {
+      fences.push({
+        index: currentIndex,
+        code: currentLines.join("\n").trim(),
+        closed: true
+      });
+      insideFence = false;
+      currentLines = [];
+      continue;
+    }
+    currentLines.push(line);
+  }
+  if (insideFence) {
+    fences.push({
+      index: currentIndex,
+      code: currentLines.join("\n").trim(),
+      closed: false
+    });
+  }
+  return fences;
+}
+function stringifyMermaidError(error) {
+  if (error instanceof Error) {
+    return error.message.trim() || error.name;
+  }
+  return String(error || "Unknown Mermaid parse error");
+}
+
+// src/wiki-link-helpers.ts
+var CODE_FENCE_PATTERN = /```[\s\S]*?```/g;
+var INLINE_CODE_PATTERN = /`[^`\n]*`/g;
+var WIKI_LINK_PATTERN = /(!)?\[\[([^[\]]+)\]\]/g;
+var ATTACHMENT_EXTENSIONS = /* @__PURE__ */ new Set([
+  ".avif",
+  ".bmp",
+  ".canvas",
+  ".gif",
+  ".jpeg",
+  ".jpg",
+  ".m4a",
+  ".mdx",
+  ".mov",
+  ".mp3",
+  ".mp4",
+  ".pdf",
+  ".png",
+  ".svg",
+  ".wav",
+  ".webm",
+  ".webp"
+]);
+function stripCodeBlocks(markdown) {
+  return markdown.replace(CODE_FENCE_PATTERN, "").replace(INLINE_CODE_PATTERN, "");
+}
+function normalizeSlashes(value) {
+  return value.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+}
+function parseWikiLinkTarget(rawTarget) {
+  const trimmed = rawTarget.trim();
+  if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("^")) {
+    return null;
+  }
+  const aliasIndex = trimmed.indexOf("|");
+  const targetWithSubpath = aliasIndex >= 0 ? trimmed.slice(0, aliasIndex) : trimmed;
+  const headingIndex = targetWithSubpath.search(/[#^]/);
+  const linkpath = normalizeSlashes(headingIndex >= 0 ? targetWithSubpath.slice(0, headingIndex) : targetWithSubpath);
+  if (!linkpath) {
+    return null;
+  }
+  const lastSegment = linkpath.split("/").pop() ?? linkpath;
+  const title = lastSegment.replace(/\.md$/i, "").trim();
+  if (!title) {
+    return null;
+  }
+  return {
+    linkpath,
+    title
+  };
+}
+function looksLikeAttachment(linkpath) {
+  const lower = linkpath.toLowerCase();
+  const extensionMatch = /\.[^./]+$/.exec(lower);
+  if (!extensionMatch) {
+    return false;
+  }
+  const extension = extensionMatch[0];
+  return extension !== ".md" && ATTACHMENT_EXTENSIONS.has(extension);
+}
+function buildMissingTargetPath(linkpath, sourcePath, pickParentFolder) {
+  if (linkpath.toLowerCase().endsWith(".md")) {
+    return normalizeSlashes(linkpath);
+  }
+  if (linkpath.includes("/")) {
+    return normalizeSlashes(`${linkpath}.md`);
+  }
+  const parentFolder = normalizeSlashes(pickParentFolder(sourcePath, `${linkpath}.md`) || "");
+  return normalizeSlashes(parentFolder ? `${parentFolder}/${linkpath}.md` : `${linkpath}.md`);
+}
+function collectMissingWikiLinkTargets(input) {
+  const sanitized = stripCodeBlocks(String(input.markdown || ""));
+  const targets = [];
+  const seenPaths = /* @__PURE__ */ new Set();
+  for (const match of sanitized.matchAll(WIKI_LINK_PATTERN)) {
+    if (match[1]) {
+      continue;
+    }
+    const parsed = parseWikiLinkTarget(match[2] || "");
+    if (!parsed) {
+      continue;
+    }
+    if (looksLikeAttachment(parsed.linkpath)) {
+      continue;
+    }
+    if (input.resolveExisting(parsed.linkpath)) {
+      continue;
+    }
+    const filePath = buildMissingTargetPath(parsed.linkpath, input.sourcePath, input.pickParentFolder);
+    if (!filePath || seenPaths.has(filePath)) {
+      continue;
+    }
+    seenPaths.add(filePath);
+    targets.push({
+      linkpath: parsed.linkpath,
+      filePath,
+      title: parsed.title
+    });
+  }
+  return targets;
+}
+
 // src/main.ts
 var VIEW_TYPE_HERMES_SIDEBAR = "hermes-sidebar-view";
 var DEFAULT_HERMES_BINARY = "hermes";
@@ -2394,25 +2777,63 @@ var HERMES_CONTEXT_MODE_OPTIONS = [
   { label: "\u7B14\u8BB0", value: "note" },
   { label: "\u624B\u52A8", value: "manual" }
 ];
+var DEFAULT_SYSTEM_PROMPT = [
+  "\u4F60\u662F Hermes\uFF0C\u8FD0\u884C\u5728\u7528\u6237\u7684 Obsidian \u77E5\u8BC6\u5E93\u4E2D\u3002",
+  "\u4F60\u7684\u6838\u5FC3\u804C\u8D23\u4E0D\u662F\u6CDB\u6CDB\u804A\u5929\uFF0C\u800C\u662F\u5E2E\u52A9\u7528\u6237\u628A\u60F3\u6CD5\u3001\u6587\u7AE0\u548C\u8D44\u6599\u6574\u7406\u6210\u53EF\u4EE5\u957F\u671F\u6C89\u6DC0\u3001\u7EE7\u7EED\u751F\u957F\u7684\u7B14\u8BB0\u3002",
+  "",
+  "\u5DE5\u4F5C\u54C1\u5473\uFF1A",
+  "- \u5199\u4F5C\u8981\u81EA\u7136\u3001\u51C6\u786E\u3001\u6709\u7ED3\u6784\uFF0C\u8BFB\u8D77\u6765\u4E0D\u50CF AI \u62FC\u8D34\u3002",
+  "- \u7ED3\u6784\u670D\u52A1\u7406\u89E3\uFF0C\u4E0D\u8981\u4E3A\u4E86\u683C\u5F0F\u800C\u683C\u5F0F\u5316\u3002",
+  "- \u65B0\u589E\u5185\u5BB9\u8981\u80FD\u88AB\u672A\u6765\u7684\u81EA\u5DF1\u7EE7\u7EED\u4F7F\u7528\u3002",
+  "- \u6982\u5FF5\u8FB9\u754C\u8981\u6E05\u695A\uFF0C\u94FE\u63A5\u8981\u6709\u610F\u4E49\uFF0C\u4E0D\u5236\u9020\u566A\u97F3\u3002",
+  "- \u907F\u514D\u8FC7\u5EA6\u53D1\u6325\uFF1B\u7528\u6237\u8981\u7684\u662F\u7B14\u8BB0\u8D28\u91CF\uFF0C\u4E0D\u662F\u8868\u6F14\u3002",
+  "",
+  "\u6C9F\u901A\u65B9\u5F0F\uFF1A",
+  "- \u9ED8\u8BA4\u7528\u81EA\u7136\u4E2D\u6587\uFF0C\u7B80\u6D01\u4F46\u4E0D\u8981\u51B7\u51B0\u51B0\u3002",
+  "- \u80FD\u76F4\u63A5\u5B8C\u6210\u7684\u4E8B\u5C31\u76F4\u63A5\u5B8C\u6210\uFF0C\u4E0D\u628A\u5B9E\u73B0\u8D23\u4EFB\u63A8\u56DE\u7ED9\u7528\u6237\u3002",
+  "- \u4F4E\u98CE\u9669\u4E0D\u786E\u5B9A\u65F6\u505A\u5408\u7406\u5047\u8BBE\u5E76\u7EE7\u7EED\uFF1B\u9AD8\u98CE\u9669\u9009\u62E9\u624D\u8BE2\u95EE\u7528\u6237\u3002",
+  "- \u6700\u7EC8\u56DE\u7B54\u8981\u77ED\uFF0C\u8BF4\u660E\u505A\u4E86\u4EC0\u4E48\u3001\u662F\u5426\u5DF2\u5E94\u7528\u3001\u6709\u6CA1\u6709\u9700\u8981\u7528\u6237\u786E\u8BA4\u7684\u98CE\u9669\u3002",
+  "",
+  "Obsidian \u5199\u5165\u534F\u8BAE\uFF1A",
+  "- \u5F53\u7528\u6237\u8981\u6C42\u4FEE\u6539\u3001\u91CD\u5199\u3001\u6DA6\u8272\u3001\u4F18\u5316\u3001\u8FFD\u52A0\u3001\u5220\u9664\uFF0C\u6216\u66F4\u6539\u5F53\u524D\u6253\u5F00\u7B14\u8BB0\u3001\u7528\u6237\u9AD8\u4EAE\u9009\u533A\u3001\u5F53\u524D\u7B14\u8BB0\u4E0A\u4E0B\u6587\u3001\u4EFB\u610F vault \u6587\u4EF6\u65F6\uFF0C\u5FC5\u987B\u7528\u6587\u4EF6\u5DE5\u5177\uFF08`patch` \u6216 `write_file`\uFF09\u771F\u6B63\u5199\u5165\u3002",
+  "- \u7528\u6237\u8BF4\u201C\u8FD9\u7BC7\u201D\u201C\u5F53\u524D\u7B14\u8BB0\u201D\u201C\u9009\u4E2D\u7684\u6587\u5B57\u201D\u201C\u539F\u6587\u201D\u201C\u6539\u4E00\u4E0B\u201D\u201C\u4F18\u5316\u4E00\u4E0B\u201D\u201C\u6DA6\u8272\u201D\u7B49\uFF0C\u9ED8\u8BA4\u6307 Obsidian \u4E0A\u4E0B\u6587\u91CC\u7684 Current open note \u6216\u9009\u533A\uFF1B\u4F7F\u7528\u5176\u4E2D\u7684\u51C6\u786E\u8DEF\u5F84\u3002",
+  "- \u4F18\u5148\u4F7F\u7528 `patch` \u505A\u5C40\u90E8\u7CBE\u51C6\u7F16\u8F91\uFF1B\u53EA\u6709\u6574\u7BC7\u91CD\u5199\u3001\u65B0\u5EFA\u6587\u4EF6\u3001\u6216\u5927\u6BB5\u7ED3\u6784\u91CD\u6392\u65F6\u624D\u4F7F\u7528 `write_file`\u3002",
+  "- \u5199\u5165\u524D\u53D1\u9001\u4E00\u53E5\u7B80\u77ED\u8FDB\u5C55\uFF0C\u8BA9\u7528\u6237\u77E5\u9053\u4F60\u6B63\u5728\u5904\u7406\u54EA\u4E00\u90E8\u5206\uFF1B\u4E0D\u8981\u8F93\u51FA\u5DE5\u5177\u65E5\u5FD7\u3001\u5185\u90E8\u94FE\u8DEF\u6216\u9690\u85CF\u63A8\u7406\u3002",
+  "- \u7528\u6237\u8981\u6C42\u6587\u4EF6\u7F16\u8F91\u65F6\uFF0C\u4E0D\u8981\u5728\u6700\u7EC8\u56DE\u7B54\u91CC\u7C98\u8D34\u5B8C\u6574\u91CD\u5199\u5185\u5BB9\uFF0C\u9664\u975E\u7528\u6237\u660E\u786E\u8981\u6C42\u3002",
+  "- \u5199\u5165\u5B8C\u6210\u540E\uFF0C\u6700\u7EC8\u56DE\u7B54\u4FDD\u6301\u7B80\u77ED\uFF1A\u8BF4\u660E\u6539\u4E86\u4EC0\u4E48\u3001\u662F\u5426\u5DF2\u5E94\u7528\u3001\u6709\u6CA1\u6709\u9700\u8981\u7528\u6237\u786E\u8BA4\u7684\u98CE\u9669\u3002",
+  "",
+  "Obsidian \u5199\u4F5C\u89C4\u8303\uFF1A",
+  "- Markdown \u5FC5\u987B\u80FD\u5728 Obsidian \u4E2D\u76F4\u63A5\u9605\u8BFB\u548C\u6E32\u67D3\uFF1B\u6807\u9898\u5C42\u7EA7\u6E05\u6670\uFF0C\u5217\u8868\u4E0D\u8981\u8FC7\u6DF1\uFF0C\u8868\u683C\u53EA\u5728\u786E\u5B9E\u63D0\u5347\u53EF\u8BFB\u6027\u65F6\u4F7F\u7528\u3002",
+  "- Callout \u7528\u4E8E\u63D0\u9192\u3001\u603B\u7ED3\u3001\u8B66\u544A\u3001\u5F85\u529E\u6216\u5173\u952E\u89C2\u70B9\uFF0C\u4E0D\u8981\u6EE5\u7528\u3002",
+  "- \u4E0D\u8981\u5F3A\u884C\u4F7F\u7528 Mermaid\u3002\u666E\u901A Markdown\u3001\u5217\u8868\u3001\u8868\u683C\u3001callout \u6216\u6B63\u6587\u8868\u8FBE\u66F4\u597D\u65F6\uFF0C\u5C31\u7528\u8FD9\u4E9B\u65B9\u5F0F\u3002",
+  "- \u5982\u679C\u4EFB\u52A1\u6D89\u53CA Mermaid \u56FE\u8868\uFF0C\u8D77\u8349\u524D\u4F18\u5148\u67E5\u770B Obsidian/Mermaid \u76F8\u5173 skill\uFF0C\u4F8B\u5982 `obsidian-cli`\u3001`obsidian-markdown`\u3001`mermaid-visualizer`\u3002",
+  "- \u5F53\u4F60\u786E\u5B9E\u9009\u62E9 Mermaid \u65F6\uFF0C\u56FE\u8868\u8981\u4FDD\u5B88\u3001\u7B80\u6D01\uFF0C\u5E76\u4E14\u80FD\u901A\u8FC7 Obsidian Mermaid \u8BED\u6CD5\u89E3\u6790\uFF1B\u4E0D\u786E\u5B9A\u80FD\u89E3\u6790\u65F6\u5C31\u7B80\u5316\u3002",
+  "",
+  "Wiki \u94FE\u63A5\u89C4\u8303\uFF1A",
+  "- Wiki \u94FE\u63A5\u5E94\u8BE5\u6307\u5411\u53EF\u957F\u671F\u6C89\u6DC0\u7684\u6982\u5FF5\u3001\u4EBA\u7269\u3001\u9879\u76EE\u3001\u7406\u8BBA\u3001\u65B9\u6CD5\u6216\u4E3B\u9898\uFF0C\u4E0D\u8981\u94FE\u63A5\u666E\u901A\u8BCD\u3001\u6CDB\u8BCD\u3001\u4E00\u6B21\u6027\u8868\u8FBE\u3002",
+  "- \u4E0D\u8981\u8FC7\u5EA6\u94FE\u63A5\u3002\u6BCF\u6BB5\u4F18\u5148\u94FE\u63A5 1-3 \u4E2A\u771F\u6B63\u6709\u4EF7\u503C\u7684\u6838\u5FC3\u6982\u5FF5\uFF1B\u540C\u4E00\u6982\u5FF5\u9996\u6B21\u51FA\u73B0\u94FE\u63A5\u5373\u53EF\u3002",
+  "- \u53EA\u6709\u76EE\u6807\u7B14\u8BB0\u5DF2\u5B58\u5728\uFF0C\u6216\u4F60\u4F1A\u5728\u540C\u4E00\u6B21\u4EFB\u52A1\u4E2D\u521B\u5EFA\u5B83\uFF0C\u624D\u6DFB\u52A0\u65B0\u7684 `[[wiki]]`\u3002",
+  "- \u5982\u679C\u5F15\u5165\u5168\u65B0\u7684 wiki \u94FE\u63A5\u6982\u5FF5\uFF0C\u5FC5\u987B\u5728\u540C\u4E00\u6B21\u5199\u5165\u6D41\u7A0B\u4E2D\u521B\u5EFA\u5BF9\u5E94 Markdown \u7B14\u8BB0\uFF0C\u8BA9\u5B83\u6210\u4E3A\u53EF\u7EE7\u7EED\u751F\u957F\u7684\u77E5\u8BC6\u79CD\u5B50\uFF0C\u800C\u4E0D\u662F\u7A7A\u58F3\u3002",
+  "- \u9047\u5230\u53EF\u80FD\u91CD\u590D\u6216\u8FD1\u4E49\u7684\u6982\u5FF5\uFF0C\u4F18\u5148\u590D\u7528\u5DF2\u6709\u7B14\u8BB0\uFF1B\u4E0D\u8981\u5236\u9020\u540C\u4E49\u91CD\u590D\u7B14\u8BB0\u3002",
+  "- \u4E0D\u8981\u7559\u4E0B\u6307\u5411\u672A\u521B\u5EFA\u7B14\u8BB0\u7684\u60AC\u7A7A wiki \u94FE\u63A5\u3002",
+  "",
+  "Skill \u4F7F\u7528\uFF1A",
+  "- \u6D89\u53CA Obsidian \u6587\u4EF6\u3001Markdown\u3001Wiki\u3001\u5C5E\u6027\u3001callout\u3001embed\u3001Canvas\u3001Bases \u65F6\uFF0C\u4F18\u5148\u67E5\u770B\u76F8\u5173 Obsidian skill\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u786C\u5199\u590D\u6742\u8BED\u6CD5\u3002",
+  "- \u6D89\u53CA Mermaid \u56FE\u8868\u65F6\uFF0C\u4F18\u5148\u67E5\u770B Mermaid/Obsidian \u56FE\u8868\u76F8\u5173 skill\u3002"
+].join("\n");
 var setHermesInlineWriteReviewEffect = import_state2.StateEffect.define();
 var hermesInlineWriteReviewField = import_state2.StateField.define({
-  create: () => ({ payload: null, decorations: import_view2.Decoration.none }),
-  update(value, transaction) {
-    let payload = value.payload;
+  create: () => import_view2.Decoration.none,
+  update(decorations, transaction) {
+    let nextDecorations = transaction.docChanged ? decorations.map(transaction.changes) : decorations;
     for (const effect of transaction.effects) {
       if (effect.is(setHermesInlineWriteReviewEffect)) {
-        payload = effect.value;
+        nextDecorations = buildHermesInlineWriteReviewDecorations(effect.value, transaction.state.doc);
       }
     }
-    if (payload === value.payload && !transaction.docChanged) {
-      return value;
-    }
-    return {
-      payload,
-      decorations: buildHermesInlineWriteReviewDecorations(payload, transaction.state.doc)
-    };
+    return nextDecorations;
   },
-  provide: (field) => import_view2.EditorView.decorations.from(field, (value) => value.decorations)
+  provide: (field) => import_view2.EditorView.decorations.from(field)
 });
 function createHermesInlineWriteReviewExtension() {
   return [hermesInlineWriteReviewField];
@@ -2424,7 +2845,7 @@ var DEFAULT_SETTINGS = {
   reasoningEffort: DEFAULT_REASONING_EFFORT,
   fallbackProvider: DEFAULT_FALLBACK_PROVIDER,
   fallbackModel: DEFAULT_FALLBACK_MODEL,
-  systemPrompt: "You are Hermes inside Obsidian. Be concise, context-aware, and helpful with note-writing tasks.",
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
   pathPrefix: DEFAULT_HERMES_PATH_PREFIX,
   contextMode: "auto"
 };
@@ -2813,7 +3234,8 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
     const markdownFiles = this.app.vault.getMarkdownFiles();
     const targetPath = resolveChatWriteReviewTargetPath(
       reviewFilePath,
-      markdownFiles.map((file) => file.path)
+      markdownFiles.map((file) => file.path),
+      getVaultBasePath(this.app)
     );
     if (!targetPath) {
       return null;
@@ -2834,6 +3256,14 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
     await markdownLeaf.openFile(file, { active: true, state: { mode: "source" } });
     await this.ensureMarkdownReviewSourceMode(markdownLeaf, file);
     return markdownLeaf.view instanceof import_obsidian2.MarkdownView ? markdownLeaf.view : null;
+  }
+  async revealMarkdownFileByReviewPath(reviewFilePath) {
+    const file = this.resolveWriteReviewMarkdownFile(reviewFilePath);
+    if (!file) {
+      return false;
+    }
+    const view = await this.revealMarkdownFileForReview(file);
+    return Boolean(view);
   }
   async ensureMarkdownReviewSourceMode(leaf, file) {
     if (leaf.view instanceof import_obsidian2.MarkdownView && leaf.view.getMode() === "source") {
@@ -2884,6 +3314,10 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activityCounter = 0;
     this.expandedActivityMessageIds = /* @__PURE__ */ new Set();
     this.expandedActivityGroupIds = /* @__PURE__ */ new Set();
+    this.activeInlineWriteReview = null;
+    this.pendingInlineWriteFollowFrame = null;
+    this.pendingWriteReviewReveal = null;
+    this.pendingWikiAutoCreateReview = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -2913,6 +3347,13 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       this.pendingScrollRestoreFrame = null;
     }
     this.cancelPendingStreamingRender();
+    this.clearInlineWriteReview();
+    if (this.pendingInlineWriteFollowFrame !== null) {
+      window.cancelAnimationFrame(this.pendingInlineWriteFollowFrame);
+      this.pendingInlineWriteFollowFrame = null;
+    }
+    this.pendingWriteReviewReveal = null;
+    this.pendingWikiAutoCreateReview = null;
     this.expandedActivityMessageIds.clear();
     this.expandedActivityGroupIds.clear();
     this.pendingImages = [];
@@ -3297,10 +3738,10 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       liveContext,
       usage: this.lastUsage
     });
-    const cacheItem = items.find((item) => item.label === "Cache");
+    const inputItem = items.find((item) => item.label === "Input");
     summary.createSpan({
       cls: "hermes-sidebar-health-pill",
-      text: cacheItem?.value ?? "\u7B49\u5F85\u4E0B\u4E00\u6B21\u56DE\u590D"
+      text: inputItem?.value ?? "\u7B49\u5F85\u4E0B\u4E00\u6B21\u56DE\u590D"
     });
     const grid = details.createDiv({ cls: "hermes-sidebar-health-grid" });
     for (const item of items) {
@@ -3583,12 +4024,21 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
             cls: "hermes-sidebar-thinking-preview-body",
             text: entry.preview
           });
+        } else if (entry.toolName === "write_trace") {
+          const tracePreview = content.createDiv({
+            cls: "hermes-sidebar-run-step-preview hermes-sidebar-write-trace-preview"
+          });
+          tracePreview.setText(entry.preview);
+          this.renderWriteReviewActivityControls(content, entry);
         } else {
           content.createDiv({
             cls: "hermes-sidebar-run-step-preview",
             text: entry.preview
           });
         }
+      }
+      if (entry.toolName === "write_trace" && !entry.preview) {
+        this.renderWriteReviewActivityControls(content, entry);
       }
       const meta = formatActivityMeta(entry);
       if (meta) {
@@ -3599,6 +4049,34 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       }
     }
     return trace;
+  }
+  renderWriteReviewActivityControls(container, entry) {
+    const active = this.activeInlineWriteReview;
+    if (entry.status !== "running" || entry.toolName !== "write_trace" || !active || active.approved) {
+      return;
+    }
+    const requestId = entry.writeReview?.requestId ?? active.requestId;
+    const controls = container.createDiv({ cls: "hermes-sidebar-write-review-actions" });
+    const cancel = controls.createEl("button", {
+      cls: "hermes-sidebar-write-review-button",
+      text: "\u53D6\u6D88",
+      attr: { type: "button" }
+    });
+    const approve = controls.createEl("button", {
+      cls: "hermes-sidebar-write-review-button is-accept",
+      text: "\u786E\u5B9A\u5199\u5165",
+      attr: { type: "button" }
+    });
+    cancel.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.cancelInlineWriteReviewFromActivity(requestId);
+    });
+    approve.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.approveInlineWriteReviewFromActivity(requestId);
+    });
   }
   ensureStreamingMessageElements(target) {
     if (this.streamingMessageRef === target && this.streamingRowEl?.isConnected && this.streamingBubbleEl?.isConnected && this.streamingBodyEl?.isConnected) {
@@ -4092,11 +4570,21 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       duration: typeof event.duration === "number" ? event.duration : void 0,
       createdAt: Date.now()
     };
+    if (toolName === "write_trace" && this.activeInlineWriteReview && status === "running") {
+      const review = this.activeInlineWriteReview.review;
+      entry.writeReview = {
+        requestId: review.requestId,
+        title: review.title,
+        meta: review.meta,
+        filePath: review.filePath
+      };
+    }
     if (existingIndex >= 0) {
       const mergedEntry = {
         ...this.activityEntries[existingIndex],
         ...entry,
-        id: this.activityEntries[existingIndex].id
+        id: this.activityEntries[existingIndex].id,
+        writeReview: entry.writeReview ?? this.activityEntries[existingIndex].writeReview
       };
       this.activityEntries[existingIndex] = mergedEntry;
       this.updateActivityMessageByEntryId(mergedEntry.id, mergedEntry);
@@ -4200,6 +4688,144 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     if (!this.statusText || !this.activityEntries.length) {
       this.statusText = text;
     }
+  }
+  handleInlineWriteTraceEvent(event) {
+    if (event.eventType === "write.review.done") {
+      void this.finalizePendingWikiAutoCreate(event.requestId);
+      void this.revealPendingWriteReviewTarget(event.requestId, event.filePath);
+    }
+    const state = this.activeInlineWriteReview;
+    if (!state) {
+      return;
+    }
+    switch (event.eventType) {
+      case "write.review.approved":
+        this.setInlineWriteReviewPhase(state.requestId, "writing");
+        break;
+      case "write.review.done":
+        this.setInlineWriteReviewPhase(state.requestId, "done");
+        break;
+      case "write.review.cancel":
+        this.setInlineWriteReviewPhase(state.requestId, "cancelled");
+        break;
+      case "write.preview.review":
+        if (state.phase === "previewing") {
+          this.setInlineWriteReviewPhase(state.requestId, "awaiting_approval");
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  rememberPendingWriteReviewReveal(review, resolvedTargetPath) {
+    if (!shouldAutoRevealWriteReviewTarget(review.filePath, resolvedTargetPath)) {
+      return;
+    }
+    const filePath = review.filePath?.trim();
+    if (!filePath) {
+      return;
+    }
+    this.pendingWriteReviewReveal = {
+      requestId: review.requestId,
+      filePath
+    };
+  }
+  rememberPendingWikiAutoCreateReview(review) {
+    const markdownFiles = this.app.vault.getMarkdownFiles();
+    const filePaths = listChatWriteReviewMarkdownTargets(
+      review,
+      markdownFiles.map((file) => file.path),
+      getVaultBasePath(this.app)
+    );
+    if (filePaths.length === 0) {
+      this.pendingWikiAutoCreateReview = null;
+      return;
+    }
+    this.pendingWikiAutoCreateReview = {
+      requestId: review.requestId,
+      filePaths
+    };
+  }
+  async revealPendingWriteReviewTarget(requestId, eventFilePath) {
+    const pending = this.pendingWriteReviewReveal;
+    if (!pending) {
+      return;
+    }
+    if (requestId && pending.requestId !== requestId) {
+      return;
+    }
+    const targetPath = eventFilePath?.trim() || pending.filePath;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const revealed = await this.plugin.revealMarkdownFileByReviewPath(targetPath);
+      if (revealed) {
+        this.pendingWriteReviewReveal = null;
+        return;
+      }
+      await new Promise((resolve2) => window.setTimeout(resolve2, 120));
+    }
+  }
+  async finalizePendingWikiAutoCreate(requestId) {
+    const pending = this.pendingWikiAutoCreateReview;
+    if (!pending) {
+      return;
+    }
+    if (requestId && pending.requestId !== requestId) {
+      return;
+    }
+    this.pendingWikiAutoCreateReview = null;
+    const createdPaths = /* @__PURE__ */ new Set();
+    for (const filePath of pending.filePaths) {
+      const created = await this.ensureWikiLinksExistForFile(filePath, createdPaths);
+      created.forEach((path) => createdPaths.add(path));
+    }
+    if (createdPaths.size > 0) {
+      this.statusText = `\u5DF2\u81EA\u52A8\u8865\u5EFA ${createdPaths.size} \u7BC7 Wiki \u6587\u7AE0`;
+      new import_obsidian2.Notice(`Hermes \u5DF2\u81EA\u52A8\u8865\u5EFA ${createdPaths.size} \u7BC7 Wiki \u6587\u7AE0`);
+    }
+  }
+  async ensureWikiLinksExistForFile(filePath, createdPaths) {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof import_obsidian2.TFile) || file.extension !== "md") {
+      return [];
+    }
+    const markdownView = this.plugin.getActiveMarkdownView();
+    const markdown = markdownView?.file?.path === file.path ? markdownView.getViewData() : await this.app.vault.cachedRead(file);
+    const missingTargets = collectMissingWikiLinkTargets({
+      markdown,
+      sourcePath: file.path,
+      resolveExisting: (linkpath) => Boolean(this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path)),
+      pickParentFolder: (sourcePath, newFilePath) => this.app.fileManager.getNewFileParent(sourcePath, newFilePath).path
+    });
+    const created = [];
+    for (const target of missingTargets) {
+      const normalizedTargetPath = (0, import_obsidian2.normalizePath)(target.filePath);
+      if (createdPaths.has(normalizedTargetPath) || this.app.vault.getAbstractFileByPath(normalizedTargetPath)) {
+        continue;
+      }
+      await this.ensureParentFolderExists(normalizedTargetPath);
+      await this.app.vault.create(normalizedTargetPath, this.buildAutoCreatedWikiNote(target.title, file));
+      created.push(normalizedTargetPath);
+    }
+    return created;
+  }
+  async ensureParentFolderExists(filePath) {
+    const normalizedFilePath = (0, import_obsidian2.normalizePath)(filePath);
+    const parts = normalizedFilePath.split("/");
+    parts.pop();
+    let currentPath = "";
+    for (const part of parts) {
+      if (!part) {
+        continue;
+      }
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      if (this.app.vault.getAbstractFileByPath(currentPath)) {
+        continue;
+      }
+      await this.app.vault.createFolder(currentPath);
+    }
+  }
+  buildAutoCreatedWikiNote(title, sourceFile) {
+    return [`# ${title}`, "", `> \u7531 Hermes \u5728 [[${sourceFile.basename}]] \u4E2D\u81EA\u52A8\u521B\u5EFA\u3002`, "", "\u5F85\u8865\u5145\u3002"].join("\n");
   }
   formatActivityText(event) {
     if (event.status === "info") {
@@ -4490,6 +5116,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
           reasoningEffort: turn.reasoningEffort
         }),
         pathPrefix: this.plugin.settings.pathPrefix,
+        workspaceCwd: getVaultBasePath(this.app),
         onWriteReview: (review) => this.confirmChatWriteReview(review),
         onEvent: (event) => {
           if (canUpdateBridgeEventWithoutFullRender(event.type)) {
@@ -4499,7 +5126,10 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
               }
               return;
             }
-            if (event.type === "activity") {
+            if (event.type === "activity" || event.type === "write_trace") {
+              if (event.type === "write_trace") {
+                this.handleInlineWriteTraceEvent(event);
+              }
               this.pushActivityEntry(event);
               const activityText = this.formatActivityText(event);
               if (activityText && event.eventType !== "run.config") {
@@ -4598,56 +5228,324 @@ ${message}`
     this.statusText = "\u6B63\u5728\u505C\u6B62\u5F53\u524D\u4EFB\u52A1";
     this.activeRunCancel();
   }
+  approveInlineWriteReviewFromActivity(requestId) {
+    const state = this.activeInlineWriteReview;
+    if (!state || state.requestId !== requestId || state.approved) {
+      return;
+    }
+    this.statusText = "\u5DF2\u786E\u8BA4\uFF0C\u6B63\u5728\u5199\u5165\u6587\u4EF6";
+    state.decisionSent = true;
+    state.resolveResult?.({ approved: true });
+    state.resolveResult = void 0;
+    this.refreshActiveWriteReviewActivityControls();
+  }
+  cancelInlineWriteReviewFromActivity(requestId) {
+    const state = this.activeInlineWriteReview;
+    if (!state || state.requestId !== requestId) {
+      return;
+    }
+    this.statusText = "\u5DF2\u53D6\u6D88\u8FD9\u6B21\u5199\u5165";
+    state.decisionSent = true;
+    state.appliedInEditor = true;
+    state.resolveResult?.({ approved: false });
+    state.resolveResult = void 0;
+    this.clearInlineWriteReview();
+    this.refreshActiveWriteReviewActivityControls();
+  }
+  refreshActiveWriteReviewActivityControls() {
+    const active = this.activeInlineWriteReview;
+    const session = this.plugin.getActiveSession();
+    const target = (active ? [...session.messages].reverse().find(
+      (message) => message.kind === "activity" && message.role === "assistant" && (message.activities ?? []).some(
+        (entry) => entry.toolName === "write_trace" && entry.status === "running"
+      )
+    ) : void 0) ?? this.getActiveActivityMessage();
+    if (target) {
+      this.refreshActivityMessage(target);
+    }
+  }
   async confirmChatWriteReview(review) {
     const inlinePreview = buildChatWriteReviewInlinePreview(review);
     const targetFile = inlinePreview ? this.plugin.resolveWriteReviewMarkdownFile(inlinePreview.filePath) : null;
+    const validation = await this.buildWriteReviewValidation(review, inlinePreview, targetFile?.path);
+    this.rememberPendingWriteReviewReveal(review, targetFile?.path ?? null);
+    this.rememberPendingWikiAutoCreateReview(review);
     if (inlinePreview && targetFile) {
       const markdownView = await this.plugin.revealMarkdownFileForReview(targetFile);
       const editorView = markdownView ? findEditorView(markdownView) : null;
-      if (editorView) {
-        return this.confirmInlineChatWriteReview(editorView, review, inlinePreview);
+      if (markdownView && editorView) {
+        return this.confirmInlineChatWriteReview(markdownView, editorView, review, inlinePreview, targetFile.path);
       }
     }
     this.statusText = `\u7B49\u5F85\u786E\u8BA4\u5199\u5165 ${(0, import_node_path.basename)(review.filePath || "\u6587\u4EF6")}`;
     return new Promise((resolve2) => {
-      const modal = new HermesWriteReviewModal(this.app, review, (approved) => {
+      const modal = new HermesWriteReviewModal(this.app, this.plugin, review, validation, (approved) => {
         if (!approved) {
           this.statusText = "\u5DF2\u53D6\u6D88\u8FD9\u6B21\u5199\u5165";
         }
-        resolve2(approved);
+        resolve2({ approved });
       });
       modal.open();
     });
   }
-  async confirmInlineChatWriteReview(editorView, review, preview) {
+  async buildWriteReviewValidation(review, inlinePreview, resolvedTargetPath) {
+    const mermaidProblems = inlinePreview && resolvedTargetPath ? await this.validateMermaidForInlineReview(inlinePreview, resolvedTargetPath) : [];
+    return { mermaidProblems };
+  }
+  async validateMermaidForInlineReview(preview, resolvedTargetPath) {
+    const file = this.app.vault.getAbstractFileByPath(resolvedTargetPath);
+    if (!(file instanceof import_obsidian2.TFile) || file.extension !== "md") {
+      return [];
+    }
+    const markdownView = this.plugin.resolveWriteReviewMarkdownFile(preview.filePath) ? this.plugin.getActiveMarkdownView() : null;
+    const originalText = markdownView?.file?.path === file.path ? markdownView.getViewData() : await this.app.vault.cachedRead(file);
+    const nextText = buildChatWriteReviewDocumentFrame(
+      preview,
+      originalText,
+      getChatWriteReviewTotalAddedCharacters(preview)
+    ).text;
+    return collectMermaidValidationProblems(nextText, async () => (0, import_obsidian2.loadMermaid)());
+  }
+  async confirmInlineChatWriteReview(markdownView, editorView, review, preview, sourcePath) {
     this.statusText = `\u5728\u539F\u6587\u4E2D\u786E\u8BA4 ${(0, import_node_path.basename)(review.filePath || "\u6587\u4EF6")}`;
     const firstLine = Math.max(1, Math.min(editorView.state.doc.lines, preview.firstLine + 1));
     editorView.dispatch({
       selection: { anchor: editorView.state.doc.line(firstLine).from },
       scrollIntoView: true
     });
+    this.startInlineWriteReview(markdownView.editor, editorView, review, preview, sourcePath);
     return new Promise((resolve2) => {
-      let settled = false;
-      const finish = (approved) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        editorView.dispatch({ effects: setHermesInlineWriteReviewEffect.of(null) });
-        if (!approved) {
-          this.statusText = "\u5DF2\u53D6\u6D88\u8FD9\u6B21\u5199\u5165";
-        }
-        resolve2(approved);
-      };
-      editorView.dispatch({
-        effects: setHermesInlineWriteReviewEffect.of({
-          review,
-          preview,
-          onApprove: () => finish(true),
-          onCancel: () => finish(false)
-        })
-      });
+      if (this.activeInlineWriteReview?.requestId === review.requestId) {
+        this.activeInlineWriteReview.resolveResult = resolve2;
+      }
+      this.setInlineWriteReviewPhase(review.requestId, "awaiting_approval");
+      this.refreshActiveWriteReviewActivityControls();
     });
+  }
+  startInlineWriteReview(editor, editorView, review, preview, sourcePath) {
+    this.clearInlineWriteReview();
+    this.activeInlineWriteReview = {
+      requestId: review.requestId,
+      review,
+      preview,
+      sourcePath,
+      originalText: editor.getValue(),
+      editorView,
+      editor,
+      phase: "previewing",
+      visibleCharacters: 0,
+      streamTimer: null,
+      clearTimer: null,
+      decisionSent: false,
+      approved: false,
+      appliedInEditor: false,
+      ignoreNextBackendDone: false
+    };
+    this.syncInlineWriteReviewDecorations();
+    const streamTimer = window.setInterval(() => {
+      this.advanceInlineWriteReviewStream();
+    }, 34);
+    if (this.activeInlineWriteReview?.requestId === review.requestId) {
+      this.activeInlineWriteReview.streamTimer = streamTimer;
+      if (getChatWriteReviewTotalAddedCharacters(preview) <= 0) {
+        this.stopInlineWriteReviewStream();
+        return;
+      }
+      this.advanceInlineWriteReviewStream();
+    } else {
+      window.clearInterval(streamTimer);
+    }
+  }
+  advanceInlineWriteReviewStream() {
+    const state = this.activeInlineWriteReview;
+    if (!state) {
+      return;
+    }
+    const nextVisibleCharacters = advanceChatWriteReviewVisibleCharacters(
+      state.preview,
+      state.visibleCharacters,
+      state.phase === "writing" ? 24 : 14
+    );
+    if (nextVisibleCharacters === state.visibleCharacters) {
+      this.stopInlineWriteReviewStream();
+      this.syncInlineWriteReviewDecorations();
+      return;
+    }
+    state.visibleCharacters = nextVisibleCharacters;
+    if (state.approved) {
+      this.applyInlineWriteReviewDocumentFrame();
+    } else {
+      this.syncInlineWriteReviewDecorations();
+    }
+    if (nextVisibleCharacters >= getChatWriteReviewTotalAddedCharacters(state.preview)) {
+      this.stopInlineWriteReviewStream();
+      if (state.approved && !state.appliedInEditor) {
+        state.appliedInEditor = true;
+        if (!state.decisionSent) {
+          state.decisionSent = true;
+          state.ignoreNextBackendDone = true;
+          state.resolveResult?.({ approved: true, appliedByClient: true });
+          state.resolveResult = void 0;
+        }
+      }
+    }
+  }
+  stopInlineWriteReviewStream() {
+    const state = this.activeInlineWriteReview;
+    if (!state?.streamTimer) {
+      return;
+    }
+    window.clearInterval(state.streamTimer);
+    state.streamTimer = null;
+  }
+  setInlineWriteReviewPhase(requestId, phase) {
+    if (!this.activeInlineWriteReview || this.activeInlineWriteReview.requestId !== requestId) {
+      return;
+    }
+    this.activeInlineWriteReview.phase = phase;
+    if (phase === "writing") {
+      this.beginInlineWriteReviewEditorWrite();
+      return;
+    }
+    if (phase === "done") {
+      if (this.activeInlineWriteReview.ignoreNextBackendDone) {
+        this.activeInlineWriteReview.ignoreNextBackendDone = false;
+        this.clearInlineWriteReview();
+        return;
+      }
+      this.stopInlineWriteReviewStream();
+      if (this.activeInlineWriteReview.approved) {
+        this.activeInlineWriteReview.visibleCharacters = getChatWriteReviewTotalAddedCharacters(
+          this.activeInlineWriteReview.preview
+        );
+        this.applyInlineWriteReviewDocumentFrame();
+      } else {
+        this.activeInlineWriteReview.visibleCharacters = getChatWriteReviewTotalAddedCharacters(
+          this.activeInlineWriteReview.preview
+        );
+        this.syncInlineWriteReviewDecorations();
+      }
+      this.scheduleInlineWriteReviewClear(requestId, 420);
+    } else if (phase === "cancelled") {
+      this.stopInlineWriteReviewStream();
+      this.scheduleInlineWriteReviewClear(requestId, 220);
+    }
+    this.syncInlineWriteReviewDecorations();
+  }
+  beginInlineWriteReviewEditorWrite() {
+    const state = this.activeInlineWriteReview;
+    if (!state?.editor) {
+      return;
+    }
+    state.approved = true;
+    state.visibleCharacters = 0;
+    this.clearInlineWriteReviewDecorations();
+    this.applyInlineWriteReviewDocumentFrame();
+    this.stopInlineWriteReviewStream();
+    const streamTimer = window.setInterval(() => {
+      this.advanceInlineWriteReviewStream();
+    }, 28);
+    state.streamTimer = streamTimer;
+    this.advanceInlineWriteReviewStream();
+  }
+  applyInlineWriteReviewDocumentFrame() {
+    const state = this.activeInlineWriteReview;
+    if (!state?.editor) {
+      return;
+    }
+    const frame = buildChatWriteReviewDocumentFrame(state.preview, state.originalText, state.visibleCharacters);
+    state.editor.setValue(frame.text);
+    const cursor = state.editor.offsetToPos(frame.activeOffset);
+    state.editor.setCursor(cursor);
+    state.editor.scrollIntoView({ from: cursor, to: cursor }, true);
+    if (frame.isComplete && !state.appliedInEditor) {
+      state.appliedInEditor = true;
+      this.stopInlineWriteReviewStream();
+      if (!state.decisionSent) {
+        state.decisionSent = true;
+        state.ignoreNextBackendDone = true;
+        state.resolveResult?.({ approved: true, appliedByClient: true });
+        state.resolveResult = void 0;
+      }
+    }
+  }
+  scheduleInlineWriteReviewClear(requestId, delayMs) {
+    const state = this.activeInlineWriteReview;
+    if (!state || state.requestId !== requestId) {
+      return;
+    }
+    if (state.clearTimer !== null) {
+      window.clearTimeout(state.clearTimer);
+    }
+    state.clearTimer = window.setTimeout(() => {
+      if (this.activeInlineWriteReview?.requestId === requestId) {
+        this.clearInlineWriteReview();
+      }
+    }, delayMs);
+  }
+  syncInlineWriteReviewDecorations() {
+    const state = this.activeInlineWriteReview;
+    if (!state) {
+      return;
+    }
+    const payload = {
+      review: state.review,
+      preview: state.preview,
+      sourcePath: state.sourcePath,
+      phase: state.phase,
+      streamFrame: buildChatWriteReviewStreamFrame(state.preview, state.visibleCharacters),
+      app: this.app,
+      component: this.plugin
+    };
+    state.editorView.dispatch({
+      effects: setHermesInlineWriteReviewEffect.of(payload)
+    });
+    this.followInlineWriteCursor();
+  }
+  clearInlineWriteReviewDecorations() {
+    const state = this.activeInlineWriteReview;
+    if (!state) {
+      return;
+    }
+    state.editorView.dispatch({
+      effects: setHermesInlineWriteReviewEffect.of(null)
+    });
+  }
+  followInlineWriteCursor() {
+    if (this.pendingInlineWriteFollowFrame !== null) {
+      window.cancelAnimationFrame(this.pendingInlineWriteFollowFrame);
+    }
+    this.pendingInlineWriteFollowFrame = window.requestAnimationFrame(() => {
+      this.pendingInlineWriteFollowFrame = null;
+      const editorView = this.activeInlineWriteReview?.editorView;
+      if (!editorView) {
+        return;
+      }
+      const activeLine = editorView.dom.querySelector(".hermes-chat-inline-review-add-line.is-active") ?? editorView.dom.querySelector(".hermes-chat-inline-review-addition.is-active") ?? editorView.dom.querySelector(".hermes-chat-inline-review-card");
+      activeLine?.scrollIntoView({ block: "center", inline: "nearest" });
+    });
+  }
+  clearInlineWriteReview(skipDispatch = false) {
+    const state = this.activeInlineWriteReview;
+    if (state && state.streamTimer !== null) {
+      window.clearInterval(state.streamTimer);
+    }
+    if (state && state.clearTimer !== null) {
+      window.clearTimeout(state.clearTimer);
+    }
+    if (state?.approved && !state.appliedInEditor && state.editor) {
+      state.editor.setValue(state.originalText);
+    }
+    if (this.pendingInlineWriteFollowFrame !== null) {
+      window.cancelAnimationFrame(this.pendingInlineWriteFollowFrame);
+      this.pendingInlineWriteFollowFrame = null;
+    }
+    if (!skipDispatch && state) {
+      state.editorView.dispatch({
+        effects: setHermesInlineWriteReviewEffect.of(null)
+      });
+    }
+    this.activeInlineWriteReview = null;
   }
   persistActiveSession(touch = true) {
     const session = this.plugin.getActiveSession();
@@ -4742,13 +5640,17 @@ var HermesInlineWriteReviewHeaderWidget = class _HermesInlineWriteReviewHeaderWi
     this.payload = payload;
   }
   eq(other) {
-    return other instanceof _HermesInlineWriteReviewHeaderWidget && other.payload === this.payload;
+    return other instanceof _HermesInlineWriteReviewHeaderWidget && other.payload.phase === this.payload.phase && other.payload.streamFrame.visibleCharacters === this.payload.streamFrame.visibleCharacters && other.payload.review.filePath === this.payload.review.filePath && other.payload.review.meta === this.payload.review.meta;
   }
   toDOM() {
     const root = document.createElement("div");
-    root.className = "hermes-chat-inline-review-card";
+    root.className = `hermes-chat-inline-review-card is-${this.payload.phase}`;
     const title = root.createDiv({ cls: "hermes-chat-inline-review-title" });
     title.createSpan({ text: this.payload.review.title?.trim() || "\u786E\u8BA4\u804A\u5929\u5199\u5165" });
+    title.createSpan({
+      cls: "hermes-chat-inline-review-status",
+      text: getInlineWriteReviewPhaseLabel(this.payload.phase)
+    });
     const meta = this.payload.review.meta?.trim();
     if (meta) {
       root.createDiv({ cls: "hermes-chat-inline-review-meta", text: meta });
@@ -4757,39 +5659,64 @@ var HermesInlineWriteReviewHeaderWidget = class _HermesInlineWriteReviewHeaderWi
     if (path) {
       root.createEl("code", { cls: "hermes-chat-inline-review-path", text: path });
     }
-    const actions = root.createDiv({ cls: "hermes-chat-inline-review-actions" });
-    const cancel = actions.createEl("button", { text: "\u53D6\u6D88", attr: { type: "button" } });
-    const approve = actions.createEl("button", {
-      cls: "mod-cta",
-      text: "\u786E\u8BA4\u5199\u5165",
-      attr: { type: "button" }
-    });
-    cancel.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.payload.onCancel();
-    });
-    approve.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.payload.onApprove();
+    root.createDiv({
+      cls: "hermes-chat-inline-review-caption",
+      text: this.payload.phase === "awaiting_approval" ? "\u786E\u8BA4\u6309\u94AE\u5728\u5F39\u7A97\u91CC\uFF0C\u6B63\u6587\u6B63\u5728\u539F\u6587\u533A\u57DF\u9010\u6B65\u5C55\u5F00\u3002" : this.payload.phase === "writing" ? "\u754C\u9762\u4F1A\u81EA\u52A8\u8DDF\u7740\u5F53\u524D\u5199\u5165\u4F4D\u7F6E\u6EDA\u52A8\u3002" : this.payload.phase === "done" ? "\u5199\u5165\u5B8C\u6210\uFF0C\u9A6C\u4E0A\u5207\u56DE\u771F\u5B9E\u6B63\u6587\u3002" : this.payload.phase === "cancelled" ? "\u8FD9\u6B21\u5199\u5165\u5DF2\u53D6\u6D88\u3002" : "\u6B63\u5728\u628A\u6539\u52A8\u76F4\u63A5\u6295\u5F71\u5230\u539F\u6587\u4F4D\u7F6E\u3002"
     });
     return root;
   }
 };
 var HermesInlineWriteReviewAdditionWidget = class _HermesInlineWriteReviewAdditionWidget extends import_view2.WidgetType {
-  constructor(addition) {
+  constructor(addition, additionIndex, phase, payload) {
     super();
     this.addition = addition;
+    this.additionIndex = additionIndex;
+    this.phase = phase;
+    this.payload = payload;
   }
   eq(other) {
-    return other instanceof _HermesInlineWriteReviewAdditionWidget && other.addition.lines.join("\n") === this.addition.lines.join("\n");
+    return other instanceof _HermesInlineWriteReviewAdditionWidget && other.phase === this.phase && other.additionIndex === this.additionIndex && other.addition.isActive === this.addition.isActive && other.addition.isComplete === this.addition.isComplete && other.addition.visibleLines.join("\n") === this.addition.visibleLines.join("\n");
   }
   toDOM() {
     const root = document.createElement("div");
-    root.className = "hermes-chat-inline-review-addition";
-    for (const line of this.addition.lines) {
-      root.createDiv({ cls: "hermes-chat-inline-review-add-line", text: `+${line}` });
+    root.className = [
+      "hermes-chat-inline-review-addition",
+      this.addition.isActive ? "is-active" : "",
+      this.addition.isComplete ? "is-complete" : "",
+      this.phase === "done" ? "is-done" : ""
+    ].filter(Boolean).join(" ");
+    root.createDiv({
+      cls: "hermes-chat-inline-review-add-marker",
+      text: this.phase === "writing" ? "\u6B63\u5728\u5199\u5165" : this.phase === "done" ? "\u5DF2\u5199\u5165" : "\u5199\u5165\u9884\u89C8"
+    });
+    const source = root.createDiv({ cls: "hermes-chat-inline-review-add-source" });
+    if (this.addition.visibleLines.length === 0) {
+      source.createDiv({
+        cls: "hermes-chat-inline-review-add-placeholder",
+        text: this.addition.isActive ? "\u51C6\u5907\u5199\u5165..." : "\u7B49\u5F85\u8F6E\u5230\u8FD9\u91CC..."
+      });
+      return root;
+    }
+    const preview = buildChatWriteReviewRenderedMarkdownPreview(this.payload.preview, this.payload.streamFrame.visibleCharacters);
+    const markdownEl = source.createDiv({ cls: "hermes-chat-inline-review-add-markdown markdown-rendered" });
+    void import_obsidian2.MarkdownRenderer.render(
+      this.payload.app,
+      preview.text || "*\uFF08\u7B49\u5F85\u5185\u5BB9\uFF09*",
+      markdownEl,
+      this.payload.sourcePath,
+      this.payload.component
+    );
+    if (preview.isPartial && this.phase !== "done") {
+      source.createDiv({
+        cls: "hermes-chat-inline-review-add-partial",
+        text: "Markdown \u9884\u89C8\u6B63\u5728\u6D41\u5F0F\u5C55\u5F00..."
+      });
+    }
+    if (this.addition.isActive && this.phase !== "done") {
+      source.createDiv({ cls: "hermes-chat-inline-review-caret-line" }).createSpan({
+        cls: "hermes-chat-inline-review-caret",
+        text: ""
+      });
     }
     return root;
   }
@@ -4822,10 +5749,21 @@ function buildHermesInlineWriteReviewDecorations(payload, doc) {
     }
   }
   for (const addition of payload.preview.additions) {
+    const streamAddition = payload.streamFrame.additions.find(
+      (candidate) => candidate.afterLine === addition.afterLine && candidate.lines.join("\n") === addition.lines.join("\n")
+    ) ?? null;
+    if (!streamAddition || !streamAddition.isActive && !streamAddition.isComplete && streamAddition.visibleLines.length === 0) {
+      continue;
+    }
     const pos = addition.afterLine < 0 ? 0 : doc.line(Math.max(1, Math.min(doc.lines, addition.afterLine + 1))).to;
     ranges.push(
       import_view2.Decoration.widget({
-        widget: new HermesInlineWriteReviewAdditionWidget(addition),
+        widget: new HermesInlineWriteReviewAdditionWidget(
+          streamAddition,
+          payload.streamFrame.additions.indexOf(streamAddition),
+          payload.phase,
+          payload
+        ),
         block: true,
         side: 1
       }).range(pos)
@@ -4877,9 +5815,12 @@ var HermesImagePreviewModal = class extends import_obsidian2.Modal {
   }
 };
 var HermesWriteReviewModal = class extends import_obsidian2.Modal {
-  constructor(app, review, resolve2) {
+  constructor(app, component, review, validation, resolve2) {
     super(app);
     this.didResolve = false;
+    this.streamTimer = null;
+    this.renderedPreviewPath = "";
+    this.renderedPreviewSource = "";
     this.keydownHandler = (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -4892,7 +5833,9 @@ var HermesWriteReviewModal = class extends import_obsidian2.Modal {
         this.dismiss(true);
       }
     };
+    this.component = component;
     this.review = review;
+    this.validation = validation;
     this.resolve = resolve2;
   }
   onOpen() {
@@ -4902,7 +5845,8 @@ var HermesWriteReviewModal = class extends import_obsidian2.Modal {
     contentEl.addClass("hermes-chat-review-modal");
     const title = this.review.title?.trim() || `\u786E\u8BA4\u5199\u5165 ${(0, import_node_path.basename)(this.review.filePath || "\u6587\u4EF6")}`;
     const meta = this.review.meta?.trim() || `${this.review.toolName || "write"} \xB7 \u804A\u5929\u5199\u5165\u786E\u8BA4`;
-    const filePath = this.review.filePath?.trim();
+    const filePath = this.review.filePath?.trim() ?? "";
+    const isMarkdownTarget = filePath.toLowerCase().endsWith(".md");
     const diffText = this.review.diff?.trim() || "(\u6CA1\u6709\u53EF\u663E\u793A\u7684 diff)";
     const header = contentEl.createDiv({ cls: "hermes-chat-review-header" });
     const titleWrap = header.createDiv({ cls: "hermes-chat-review-title-wrap" });
@@ -4911,12 +5855,51 @@ var HermesWriteReviewModal = class extends import_obsidian2.Modal {
     if (filePath) {
       titleWrap.createEl("code", { cls: "hermes-chat-review-path", text: filePath });
     }
-    const diffPanel = contentEl.createDiv({ cls: "hermes-chat-review-diff" });
-    for (const line of diffText.split("\n")) {
-      diffPanel.createDiv({
-        cls: `hermes-chat-review-line ${this.getDiffLineClass(line)}`,
-        text: line || " "
+    if (isMarkdownTarget) {
+      const preview = buildChatWriteReviewInlinePreview(this.review);
+      if (preview) {
+        const previewPanel = contentEl.createDiv({ cls: "hermes-chat-review-rendered" });
+        previewPanel.createDiv({ cls: "hermes-chat-review-rendered-label", text: "Markdown \u9884\u89C8" });
+        this.renderedPreviewBody = previewPanel.createDiv({
+          cls: "hermes-chat-review-rendered-body markdown-rendered"
+        });
+        const previewHint = previewPanel.createDiv({
+          cls: "hermes-chat-review-rendered-hint",
+          text: "\u6B63\u5728\u6309\u5199\u5165\u987A\u5E8F\u6D41\u5F0F\u5C55\u5F00..."
+        });
+        this.renderedPreviewPath = filePath;
+        this.renderedPreviewSource = buildChatWriteReviewRenderedMarkdownPreview(preview).text;
+        this.startRenderedPreviewStream(previewHint);
+      }
+    }
+    if (this.validation.mermaidProblems.length > 0) {
+      const problemPanel = contentEl.createDiv({ cls: "hermes-chat-review-mermaid-warnings" });
+      problemPanel.createDiv({
+        cls: "hermes-chat-review-rendered-label",
+        text: `Mermaid \u8BED\u6CD5\u68C0\u67E5\u53D1\u73B0 ${this.validation.mermaidProblems.length} \u5904\u95EE\u9898`
       });
+      for (const problem of this.validation.mermaidProblems) {
+        const item = problemPanel.createDiv({ cls: "hermes-chat-review-mermaid-warning-item" });
+        item.createDiv({
+          cls: "hermes-chat-review-mermaid-warning-title",
+          text: `\u56FE\u8868 ${problem.index + 1}: ${problem.message}`
+        });
+        if (problem.code) {
+          item.createEl("pre", {
+            cls: "hermes-chat-review-mermaid-warning-code",
+            text: problem.code
+          });
+        }
+      }
+    }
+    if (!isMarkdownTarget) {
+      const diffPanel = contentEl.createDiv({ cls: "hermes-chat-review-diff" });
+      for (const line of diffText.split("\n")) {
+        diffPanel.createDiv({
+          cls: `hermes-chat-review-line ${this.getDiffLineClass(line)}`,
+          text: line || " "
+        });
+      }
     }
     const actions = contentEl.createDiv({ cls: "hermes-chat-review-actions" });
     const cancelButton = actions.createEl("button", {
@@ -4934,6 +5917,10 @@ var HermesWriteReviewModal = class extends import_obsidian2.Modal {
     window.setTimeout(() => confirmButton.focus({ preventScroll: true }), 0);
   }
   onClose() {
+    if (this.streamTimer !== null) {
+      window.clearInterval(this.streamTimer);
+      this.streamTimer = null;
+    }
     document.removeEventListener("keydown", this.keydownHandler, true);
     this.modalEl.removeClass("hermes-chat-review-modal-shell");
     this.contentEl.removeClass("hermes-chat-review-modal");
@@ -4965,6 +5952,50 @@ var HermesWriteReviewModal = class extends import_obsidian2.Modal {
       return "is-remove";
     }
     return "is-context";
+  }
+  startRenderedPreviewStream(hintEl) {
+    if (!this.renderedPreviewBody) {
+      return;
+    }
+    const source = this.renderedPreviewSource.trim();
+    if (!source) {
+      hintEl.setText("\u6CA1\u6709\u53EF\u6E32\u67D3\u7684 Markdown \u5185\u5BB9\u3002");
+      return;
+    }
+    let visibleCharacters = 0;
+    const renderFrame = () => {
+      if (!this.renderedPreviewBody) {
+        return;
+      }
+      const nextVisible = Math.min(source.length, visibleCharacters + 24);
+      visibleCharacters = nextVisible;
+      void this.renderPreviewMarkdown(source.slice(0, visibleCharacters));
+      if (visibleCharacters >= source.length) {
+        hintEl.setText("Markdown \u9884\u89C8\u5DF2\u5B8C\u6574\u5C55\u5F00\u3002");
+        if (this.streamTimer !== null) {
+          window.clearInterval(this.streamTimer);
+          this.streamTimer = null;
+        }
+      }
+    };
+    renderFrame();
+    if (visibleCharacters >= source.length) {
+      return;
+    }
+    this.streamTimer = window.setInterval(renderFrame, 34);
+  }
+  async renderPreviewMarkdown(markdown) {
+    if (!this.renderedPreviewBody) {
+      return;
+    }
+    this.renderedPreviewBody.empty();
+    await import_obsidian2.MarkdownRenderer.render(
+      this.app,
+      markdown || "*\uFF08\u7B49\u5F85\u5185\u5BB9\uFF09*",
+      this.renderedPreviewBody,
+      this.renderedPreviewPath,
+      this.component
+    );
   }
 };
 var HermesSidebarSettingTab = class extends import_obsidian2.PluginSettingTab {
@@ -5026,6 +6057,7 @@ function runHermesBridge(input) {
     ...process.env,
     PATH: [...prefixParts, ...currentParts].join(import_node_path.delimiter),
     HERMES_AGENT_ROOT: input.hermesRoot,
+    TERMINAL_CWD: input.workspaceCwd || input.hermesRoot,
     PYTHONUNBUFFERED: "1"
   };
   let child = null;
@@ -5054,6 +6086,14 @@ function runHermesBridge(input) {
       if (!event || typeof event !== "object") {
         return;
       }
+      if (event.type === "write_trace") {
+        input.onEvent?.({
+          ...event,
+          type: "write_trace",
+          toolName: event.toolName || "write_trace"
+        });
+        return;
+      }
       if (event.type === "write_review") {
         const requestId = event.requestId?.trim();
         if (!requestId) {
@@ -5064,7 +6104,7 @@ function runHermesBridge(input) {
           text: `\u7B49\u5F85\u786E\u8BA4\u5199\u5165 ${(0, import_node_path.basename)(event.filePath || "\u6587\u4EF6")}`
         });
         void (async () => {
-          const approved = input.onWriteReview ? await input.onWriteReview({
+          const decision = input.onWriteReview ? await input.onWriteReview({
             requestId,
             toolName: event.toolName,
             title: event.title,
@@ -5072,10 +6112,13 @@ function runHermesBridge(input) {
             filePath: event.filePath,
             diff: event.diff
           }) : false;
+          const approved = typeof decision === "boolean" ? decision : decision.approved;
+          const appliedByClient = typeof decision === "boolean" ? false : Boolean(decision.appliedByClient);
           sendControlMessage({
             type: "write_review_response",
             requestId,
-            approved
+            approved,
+            appliedByClient
           });
           input.onEvent?.({
             type: "status",
@@ -5173,6 +6216,7 @@ function runHermesBridge(input) {
       reasoningEffort: input.reasoningEffort,
       sessionId: input.sessionId,
       imagePaths: input.imagePaths,
+      workspaceCwd: input.workspaceCwd,
       conversationHistory: input.conversationHistory
     };
     try {
@@ -5212,15 +6256,18 @@ function runInlineHermesBridge(plugin, input) {
     model: input.model,
     reasoningEffort: input.reasoningEffort,
     systemPrompt: input.systemPrompt,
-    pathPrefix: plugin.settings.pathPrefix
+    pathPrefix: plugin.settings.pathPrefix,
+    workspaceCwd: getVaultBasePath(plugin.app)
   });
 }
 function buildHermesSystemPrompt(basePrompt, runtime) {
   const trimmed = basePrompt.trim();
   const progressInstruction = buildHermesInterimGuidance(runtime);
-  return trimmed ? `${trimmed}
-
-${progressInstruction}` : progressInstruction;
+  const writeInstruction = trimmed.includes("Obsidian \u5199\u5165\u534F\u8BAE\uFF1A") ? "" : buildHermesObsidianWriteGuidance();
+  return [trimmed, writeInstruction, progressInstruction].filter(Boolean).join("\n\n");
+}
+function getVaultBasePath(app) {
+  return (app.vault.adapter?.basePath ?? "").trim();
 }
 function normalizeContextMode(value) {
   const normalized = (value || "").trim();
@@ -5230,7 +6277,7 @@ function resolveBridgeScriptPath(app, manifestDir) {
   if (manifestDir && (0, import_node_path.isAbsolute)(manifestDir)) {
     return (0, import_node_path.resolve)((0, import_node_path.join)(manifestDir, DEFAULT_HERMES_BRIDGE));
   }
-  const vaultBasePath = app.vault.adapter?.basePath;
+  const vaultBasePath = getVaultBasePath(app);
   if (vaultBasePath && manifestDir) {
     return (0, import_node_path.resolve)(vaultBasePath, manifestDir, DEFAULT_HERMES_BRIDGE);
   }
@@ -5243,7 +6290,7 @@ function resolvePluginAssetPath(app, manifestDir, assetName) {
   if (manifestDir && (0, import_node_path.isAbsolute)(manifestDir)) {
     return (0, import_node_path.resolve)((0, import_node_path.join)(manifestDir, assetName));
   }
-  const vaultBasePath = app.vault.adapter?.basePath;
+  const vaultBasePath = getVaultBasePath(app);
   if (vaultBasePath && manifestDir) {
     return (0, import_node_path.resolve)(vaultBasePath, manifestDir, assetName);
   }
@@ -5383,9 +6430,27 @@ function joinActivityText(label, preview, maxLength = 72) {
   }
   return `${label}\uFF1A${formatSelectionPreview(compactPreview, maxLength)}`;
 }
+function getInlineWriteReviewPhaseLabel(phase) {
+  if (phase === "awaiting_approval") {
+    return "\u7B49\u5F85\u786E\u8BA4";
+  }
+  if (phase === "writing") {
+    return "\u6B63\u5728\u5199\u5165";
+  }
+  if (phase === "done") {
+    return "\u5DF2\u5B8C\u6210";
+  }
+  if (phase === "cancelled") {
+    return "\u5DF2\u53D6\u6D88";
+  }
+  return "\u751F\u6210\u9884\u89C8";
+}
 function formatActivityTitleForTimeline(entry, index) {
   if (entry.toolName === "run.config") {
     return "Run config";
+  }
+  if (entry.toolName === "write_trace") {
+    return "\u5199\u5165\u8FFD\u8E2A";
   }
   if (entry.toolName === "thinking") {
     return "thinking";
@@ -5428,6 +6493,9 @@ function isDetailedStatusText(text) {
   ])).has(value);
 }
 function formatToolDisplayName(toolName) {
+  if (toolName === "write_trace") {
+    return "\u5199\u5165\u8FFD\u8E2A";
+  }
   if (toolName === "skill_view") {
     return "skill_view";
   }
@@ -5440,6 +6508,9 @@ function formatToolDisplayName(toolName) {
   return toolName;
 }
 function formatToolStatusText(toolName, status) {
+  if (toolName === "write_trace") {
+    return status === "running" ? "\u6B63\u5728\u8FFD\u8E2A\u5199\u5165" : status === "done" ? "\u5199\u5165\u8FFD\u8E2A\u5B8C\u6210" : "\u5199\u5165\u5DF2\u53D6\u6D88";
+  }
   if (toolName === "skill_view") {
     return status === "running" ? "\u6B63\u5728\u8BFB\u53D6 skill" : status === "done" ? "\u5DF2\u8BFB\u53D6 skill" : "skill \u8BFB\u53D6\u5931\u8D25";
   }

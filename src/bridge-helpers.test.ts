@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
 	buildReplayAssistantContent,
+	buildHermesObsidianWriteGuidance,
 	buildHermesInterimGuidance,
 	buildReplayUserContent,
 	buildTurnUserText,
@@ -218,9 +219,25 @@ test("buildHermesInterimGuidance nudges Hermes toward real mid-turn commentary o
 	});
 
 	assert.match(guidance, /Current runtime: provider=deepseek, model=deepseek-v4-pro, reasoning_effort=xhigh/);
-	assert.match(guidance, /For multi-step, tool-using, or longer tasks, proactively send 1-3 brief interim assistant messages/);
-	assert.match(guidance, /Skip interim updates for very short tasks where they would feel noisy/);
-	assert.match(guidance, /Do not reveal chain-of-thought/);
+	assert.match(guidance, /多步骤、工具调用或较长任务中/);
+	assert.match(guidance, /非常短的任务可以跳过进展/);
+	assert.match(guidance, /不要泄露思维链/);
+});
+
+test("buildHermesObsidianWriteGuidance forces note edits through file tools", () => {
+	const guidance = buildHermesObsidianWriteGuidance();
+
+	assert.match(guidance, /write_file/);
+	assert.match(guidance, /patch/);
+	assert.match(guidance, /必须用文件工具/);
+	assert.match(guidance, /不要强行使用 Mermaid/);
+	assert.match(guidance, /能通过 Obsidian Mermaid 语法解析/);
+	assert.match(guidance, /Wiki 链接应该指向可长期沉淀的概念/);
+	assert.match(guidance, /每段优先链接 1-3 个真正有价值的核心概念/);
+	assert.match(guidance, /不要留下指向未创建笔记的悬空 wiki 链接/);
+	assert.match(guidance, /不要在最终回答里粘贴完整重写内容/);
+	assert.match(guidance, /写入前发送一句简短进展/);
+	assert.match(guidance, /Current open note/);
 });
 
 test("looksLikeInternalReasoningText catches tool-planning chatter without hiding normal answers", () => {

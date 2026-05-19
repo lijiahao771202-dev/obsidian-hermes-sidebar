@@ -50,6 +50,34 @@ const OBSIDIAN_CONTEXT_PREAMBLE = [
 const OBSIDIAN_CONTEXT_CLAMP_MAX_CHARACTERS = 2400;
 const OBSIDIAN_CONTEXT_CLAMP_HEAD_CHARACTERS = 1400;
 const OBSIDIAN_CONTEXT_CLAMP_TAIL_CHARACTERS = 800;
+const OBSIDIAN_WRITE_GUIDANCE = [
+	"Obsidian 写入协议：",
+	"- 当用户要求修改、重写、润色、优化、追加、删除，或更改当前打开笔记、用户高亮选区、当前笔记上下文、任意 vault 文件时，必须用文件工具（`patch` 或 `write_file`）真正写入。",
+	"- 用户说“这篇”“当前笔记”“选中的文字”“原文”“改一下”“优化一下”“润色”等，默认指 Obsidian 上下文里的 Current open note 或选区；使用其中的准确路径。",
+	"- 优先使用 `patch` 做局部精准编辑；只有整篇重写、新建文件、或大段结构重排时才使用 `write_file`。",
+	"- 写入前发送一句简短进展，让用户知道你正在处理哪一部分；不要输出工具日志、内部链路或隐藏推理。",
+	"- 用户要求文件编辑时，不要在最终回答里粘贴完整重写内容，除非用户明确要求。",
+	"- 写入完成后，最终回答保持简短：说明改了什么、是否已应用、有没有需要用户确认的风险。",
+	"",
+	"Obsidian 写作规范：",
+	"- Markdown 必须能在 Obsidian 中直接阅读和渲染；标题层级清晰，列表不要过深，表格只在确实提升可读性时使用。",
+	"- Callout 用于提醒、总结、警告、待办或关键观点，不要滥用。",
+	"- 不要强行使用 Mermaid。普通 Markdown、列表、表格、callout 或正文表达更好时，就用这些方式。",
+	"- 如果任务涉及 Mermaid 图表，起草前优先查看 Obsidian/Mermaid 相关 skill，例如 `obsidian-cli`、`obsidian-markdown`、`mermaid-visualizer`。",
+	"- 当你确实选择 Mermaid 时，图表要保守、简洁，并且能通过 Obsidian Mermaid 语法解析；不确定能解析时就简化。",
+	"",
+	"Wiki 链接规范：",
+	"- Wiki 链接应该指向可长期沉淀的概念、人物、项目、理论、方法或主题，不要链接普通词、泛词、一次性表达。",
+	"- 不要过度链接。每段优先链接 1-3 个真正有价值的核心概念；同一概念首次出现链接即可。",
+	"- 只有目标笔记已存在，或你会在同一次任务中创建它，才添加新的 `[[wiki]]`。",
+	"- 如果引入全新的 wiki 链接概念，必须在同一次写入流程中创建对应 Markdown 笔记，让它成为可继续生长的知识种子，而不是空壳。",
+	"- 遇到可能重复或近义的概念，优先复用已有笔记；不要制造同义重复笔记。",
+	"- 不要留下指向未创建笔记的悬空 wiki 链接。",
+	"",
+	"Skill 使用：",
+	"- 涉及 Obsidian 文件、Markdown、Wiki、属性、callout、embed、Canvas、Bases 时，优先查看相关 Obsidian skill，不要凭记忆硬写复杂语法。",
+	"- 涉及 Mermaid 图表时，优先查看 Mermaid/Obsidian 图表相关 skill。"
+].join("\n");
 
 function normalizeText(text?: string): string {
 	return typeof text === "string" ? text.trim() : "";
@@ -94,15 +122,17 @@ export function buildHermesInterimGuidance(runtime?: HermesRuntimePromptInput): 
 
 	return [
 		`Current runtime: provider=${runtimeProvider}, model=${runtimeModel}, reasoning_effort=${runtimeReasoning}.`,
-		"If the user asks what reasoning strength is active, answer from this Current runtime line instead of guessing from your hidden internals.",
-		"For multi-step, tool-using, or longer tasks, proactively send 1-3 brief interim assistant messages to the user in natural Chinese before the final answer.",
-		"Good moments include after you finish reading important context, when you begin writing, or when your plan meaningfully changes.",
-		"Skip interim updates for very short tasks where they would feel noisy.",
-		"Use those interim messages like real progress updates someone would actually say in chat.",
-		"Keep them short, warm, and concrete.",
-		"Do not reveal chain-of-thought, raw tool logs, internal trace text, or hidden reasoning.",
-		"Keep the final answer separate from any interim progress updates."
+		"如果用户询问当前模型或推理强度，只能根据这行运行时信息回答；不要猜测隐藏内部状态，也不要承诺 provider 一定严格执行该档位。",
+		"多步骤、工具调用或较长任务中，在最终回答前主动发送 1-3 条自然中文进展消息。",
+		"适合发送进展的时机：读完关键上下文、开始写入、计划明显变化、发现风险。",
+		"非常短的任务可以跳过进展，避免打扰。",
+		"进展消息要短、具体、像真人协作中的同步；不要泄露思维链、原始工具日志、内部追踪文本或隐藏推理。",
+		"最终回答要和中途进展分开。"
 	].join(" ");
+}
+
+export function buildHermesObsidianWriteGuidance(): string {
+	return OBSIDIAN_WRITE_GUIDANCE;
 }
 
 export function buildTurnUserText(text: string, imageCount: number): string {

@@ -8,6 +8,7 @@ import {
 	buildContextHealthItems,
 	buildSessionTitle,
 	formatBridgeConnectionStatus,
+	formatUsageInputTokens,
 	getContextModeDescription,
 	getAppendIndexAfterTurnMessages,
 	pickLiveContextForMode,
@@ -108,6 +109,11 @@ test("formatBridgeConnectionStatus shows Hermes session id and cache usage when 
 	assert.equal(formatBridgeConnectionStatus(undefined, undefined), "已收到回复");
 });
 
+test("formatUsageInputTokens only shows real input token usage", () => {
+	assert.equal(formatUsageInputTokens({ inputTokens: 136248 }), "136,248 tokens");
+	assert.equal(formatUsageInputTokens(undefined), "等待下一次回复");
+});
+
 test("pickLiveContextForMode applies explicit Obsidian context modes", () => {
 	const liveContext = {
 		noteTitle: "正念练习",
@@ -145,13 +151,14 @@ test("buildContextHealthItems summarizes session, cache, and pending context sta
 			},
 			usage: {
 				apiCalls: 2,
+				inputTokens: 136248,
 				cacheHitRate: 87
 			}
 		}),
 		[
 			{ label: "Session", value: "20260518_123000_abcdef" },
 			{ label: "Cache", value: "87% · 2 calls" },
-			{ label: "Context", value: "选区优先 · 正念练习 · 选区 9 字 · 附近上下文 15 字" },
+			{ label: "Context", value: "正念练习 · 选区 9 字 · 附近上下文 15 字" },
 			{ label: "Pending", value: "2 段上下文 · 1 张图片 · 3 条排队" }
 		]
 	);
@@ -279,6 +286,7 @@ test("shouldDeferScrollRestore waits until async message rendering can hold the 
 test("canUpdateBridgeEventWithoutFullRender keeps streaming events from rebuilding the message list", () => {
 	assert.equal(canUpdateBridgeEventWithoutFullRender("status"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("activity"), true);
+	assert.equal(canUpdateBridgeEventWithoutFullRender("write_trace"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("progress"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("delta"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("final"), false);
@@ -449,6 +457,16 @@ test("getActivityChainTailVisibleCount keeps the latest real tool visible when t
 	);
 });
 
+test("getActivityChainTailVisibleCount keeps write traces visible while writing", () => {
+	assert.equal(
+		getActivityChainTailVisibleCount([
+			{ pending: false, activities: [{ toolName: "thinking", status: "done", preview: "先想一下" }] },
+			{ pending: true, activities: [{ toolName: "write_trace", status: "running", preview: "正在生成修改预览" }] }
+		]),
+		2
+	);
+});
+
 test("getVisibleActivityMessages shows all activity messages when expanded", () => {
 	const messages = [
 		{ pending: false, activities: [{ toolName: "terminal", status: "done", preview: "message-1" }] },
@@ -480,6 +498,7 @@ test("shouldMergeActivityEntry keeps streaming thinking in a single visible row"
 	assert.equal(shouldMergeActivityEntry("thinking", "done", "running", "让", "让我"), false);
 	assert.equal(shouldMergeActivityEntry("terminal", "running", "running", "cat a", "cat a"), true);
 	assert.equal(shouldMergeActivityEntry("terminal", "running", "running", "cat a", "cat b"), false);
+	assert.equal(shouldMergeActivityEntry("write_trace", "running", "running", "preview a", "preview b"), true);
 	assert.equal(shouldMergeActivityEntry("read_file", "running", "done", "/tmp/a.md", "/tmp/a.md"), true);
 	assert.equal(shouldMergeActivityEntry("read_file", "done", "done", "/tmp/a.md", "/tmp/a.md"), false);
 });

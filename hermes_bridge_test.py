@@ -10,6 +10,7 @@ from hermes_bridge import (
     apply_runtime_reasoning_to_api_kwargs,
     append_reasoning_delta_preview,
     build_write_review_request,
+    build_write_trace_events,
     build_usage_summary,
     compact_preview,
     extract_new_reasoning_delta,
@@ -122,6 +123,14 @@ class HermesBridgeHelpersTest(unittest.TestCase):
             "skill=obsidian-cli",
         )
         self.assertEqual(
+            summarize_tool_args("patch", {"mode": "replace", "path": "notes/demo.md"}, ""),
+            "准备修改 notes/demo.md",
+        )
+        self.assertEqual(
+            summarize_tool_args("write_file", {"path": "notes/demo.md"}, ""),
+            "准备写入 notes/demo.md",
+        )
+        self.assertEqual(
             summarize_tool_args("obsidian_search", {"query": "wiki 双链", "path": "notes"}, ""),
             "query=wiki 双链",
         )
@@ -180,12 +189,17 @@ class HermesBridgeHelpersTest(unittest.TestCase):
             build_usage_summary({
                 "api_calls": 3,
                 "input_tokens": 10000,
+                "last_prompt_tokens": 20813,
+                "context_length": 1000000,
                 "cache_read_tokens": 7600,
                 "cache_write_tokens": 500,
             }),
             {
                 "apiCalls": 3,
                 "inputTokens": 10000,
+                "lastPromptTokens": 20813,
+                "contextLength": 1000000,
+                "contextPercent": 2,
                 "cacheReadTokens": 7600,
                 "cacheWriteTokens": 500,
                 "cacheHitRate": 76,
@@ -196,11 +210,16 @@ class HermesBridgeHelpersTest(unittest.TestCase):
             build_usage_summary({
                 "api_calls": 1,
                 "input_tokens": 0,
+                "last_prompt_tokens": 0,
+                "context_length": 0,
                 "cache_read_tokens": 0,
             }),
             {
                 "apiCalls": 1,
                 "inputTokens": 0,
+                "lastPromptTokens": 0,
+                "contextLength": None,
+                "contextPercent": None,
                 "cacheReadTokens": 0,
                 "cacheWriteTokens": 0,
                 "cacheHitRate": None,
@@ -248,6 +267,24 @@ class HermesBridgeHelpersTest(unittest.TestCase):
             self.assertEqual(review["filePath"], str(path))
             self.assertIn("-旧句子", review["diff"])
             self.assertIn("+新句子", review["diff"])
+
+    def test_build_write_trace_events_streams_patch_preview_before_review(self):
+        review = {
+            "toolName": "patch",
+            "filePath": "/vault/note.md",
+            "meta": "patch · 1 file · -1 +2",
+            "diff": "--- a/note.md\n+++ b/note.md\n@@ -1 +1,2 @@\n-旧句子\n+## 新标题\n+新句子\n",
+        }
+
+        events = build_write_trace_events(review, phase="preview")
+
+        self.assertGreaterEqual(len(events), 2)
+        self.assertEqual(events[0]["type"], "write_trace")
+        self.assertEqual(events[0]["status"], "running")
+        self.assertEqual(events[0]["toolName"], "write_trace")
+        self.assertIn("生成修改预览", events[0]["text"])
+        self.assertIn("note.md", events[0]["preview"])
+        self.assertTrue(any("## 新标题" in event["preview"] for event in events))
 
     def test_build_write_review_request_for_v4a_patch_returns_combined_diff(self):
         with tempfile.TemporaryDirectory() as temp_dir:
