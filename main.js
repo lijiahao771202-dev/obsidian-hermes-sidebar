@@ -3446,18 +3446,28 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       cls: "hermes-sidebar-header-actions"
     });
     const historyButton = headerActions.createEl("button", {
-      cls: "hermes-sidebar-button",
-      text: "\u5386\u53F2"
+      cls: "hermes-sidebar-button hermes-sidebar-icon-button",
+      attr: {
+        type: "button",
+        title: "\u5386\u53F2",
+        "aria-label": "\u5386\u53F2"
+      }
     });
+    (0, import_obsidian2.setIcon)(historyButton, "history");
     historyButton.toggleClass("is-active", this.isHistoryOpen);
     historyButton.addEventListener("click", () => {
       this.isHistoryOpen = !this.isHistoryOpen;
       this.render(false);
     });
     const resetButton = headerActions.createEl("button", {
-      cls: "hermes-sidebar-button",
-      text: "\u65B0\u5BF9\u8BDD"
+      cls: "hermes-sidebar-button hermes-sidebar-icon-button",
+      attr: {
+        type: "button",
+        title: "\u65B0\u5BF9\u8BDD",
+        "aria-label": "\u65B0\u5BF9\u8BDD"
+      }
     });
+    (0, import_obsidian2.setIcon)(resetButton, "message-square-plus");
     resetButton.addEventListener("click", () => {
       if (this.isSending) {
         new import_obsidian2.Notice("Stop the current reply before starting a new chat.");

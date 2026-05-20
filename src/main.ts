@@ -1179,18 +1179,28 @@ class HermesSidebarView extends ItemView {
 			cls: "hermes-sidebar-header-actions"
 		});
 		const historyButton = headerActions.createEl("button", {
-			cls: "hermes-sidebar-button",
-			text: "历史"
+			cls: "hermes-sidebar-button hermes-sidebar-icon-button",
+			attr: {
+				type: "button",
+				title: "历史",
+				"aria-label": "历史"
+			}
 		});
+		setIcon(historyButton, "history");
 		historyButton.toggleClass("is-active", this.isHistoryOpen);
 		historyButton.addEventListener("click", () => {
 			this.isHistoryOpen = !this.isHistoryOpen;
 			this.render(false);
 		});
 		const resetButton = headerActions.createEl("button", {
-			cls: "hermes-sidebar-button",
-			text: "新对话"
+			cls: "hermes-sidebar-button hermes-sidebar-icon-button",
+			attr: {
+				type: "button",
+				title: "新对话",
+				"aria-label": "新对话"
+			}
 		});
+		setIcon(resetButton, "message-square-plus");
 		resetButton.addEventListener("click", () => {
 			if (this.isSending) {
 				new Notice("Stop the current reply before starting a new chat.");
