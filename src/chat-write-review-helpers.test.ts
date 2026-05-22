@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
 	advanceChatWriteReviewVisibleCharacters,
+	buildChatWriteReviewOverview,
 	buildChatWriteAppliedReview,
 	buildChatWriteReviewAdditionMarkdown,
 	buildChatWriteReviewDocumentFrame,
@@ -12,7 +13,8 @@ import {
 	getChatWriteReviewTotalAddedCharacters,
 	listChatWriteReviewMarkdownTargets,
 	resolveChatWriteReviewTargetPath,
-	shouldAutoRevealWriteReviewTarget
+	shouldAutoRevealWriteReviewTarget,
+	summarizeChatWriteReviewFiles
 } from "./chat-write-review-helpers.ts";
 
 test("buildChatWriteAppliedReview normalizes applied diff review events", () => {
@@ -74,6 +76,84 @@ test("buildChatWriteReviewInlinePreview rejects multi-file chat patches for inli
 		}),
 		null
 	);
+});
+
+test("summarizeChatWriteReviewFiles groups multi-file diffs by target file", () => {
+	const files = summarizeChatWriteReviewFiles({
+		filePath: "/Users/me/Vault/A.md, /Users/me/Vault/B.md",
+		diff: [
+			"diff --git a/A.md b/A.md",
+			"--- a/A.md",
+			"+++ b/A.md",
+			"@@ -1 +1 @@",
+			"-old",
+			"+new",
+			"diff --git a/B.md b/B.md",
+			"--- /dev/null",
+			"+++ b/B.md",
+			"@@ -0,0 +1,2 @@",
+			"+# Fresh",
+			"+note"
+		].join("\n")
+	});
+
+	assert.deepEqual(files, [
+		{
+			path: "A.md",
+			kind: "modified",
+			oldPath: "A.md",
+			newPath: "A.md",
+			additions: ["new"],
+			removals: ["old"]
+		},
+		{
+			path: "B.md",
+			kind: "created",
+			newPath: "B.md",
+			additions: ["# Fresh", "note"],
+			removals: []
+		}
+	]);
+});
+
+test("buildChatWriteReviewOverview returns totals and folds extra files", () => {
+	const overview = buildChatWriteReviewOverview(
+		{
+			filePath: "/Users/me/Vault/A.md, /Users/me/Vault/B.md, /Users/me/Vault/C.md, /Users/me/Vault/D.md",
+			diff: [
+				"diff --git a/A.md b/A.md",
+				"--- a/A.md",
+				"+++ b/A.md",
+				"@@ -1 +1,2 @@",
+				"-old",
+				"+new",
+				"+line",
+				"diff --git a/B.md b/B.md",
+				"--- a/B.md",
+				"+++ b/B.md",
+				"@@ -1 +1 @@",
+				"-x",
+				"+y",
+				"diff --git a/C.md b/C.md",
+				"--- /dev/null",
+				"+++ b/C.md",
+				"@@ -0,0 +1 @@",
+				"+fresh",
+				"diff --git a/D.md b/D.md",
+				"--- a/D.md",
+				"+++ b/D.md",
+				"@@ -1 +0,0 @@",
+				"-gone"
+			].join("\n")
+		},
+		3
+	);
+
+	assert.equal(overview.fileCount, 4);
+	assert.equal(overview.additions, 4);
+	assert.equal(overview.removals, 3);
+	assert.deepEqual(overview.visibleFiles.map((file) => file.path), ["A.md", "B.md", "C.md"]);
+	assert.deepEqual(overview.hiddenFiles.map((file) => file.path), ["D.md"]);
 });
 
 test("resolveChatWriteReviewTargetPath matches absolute bridge paths to vault-relative markdown files", () => {

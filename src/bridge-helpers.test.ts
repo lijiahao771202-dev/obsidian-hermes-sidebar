@@ -73,6 +73,35 @@ test("pickBridgeFinalText prefers final text and never promotes reasoning previe
 		}),
 		""
 	);
+
+	assert.equal(
+		pickBridgeFinalText({
+			finalText: "",
+			streamedText: "",
+			progressTexts: [],
+			reasoningPreviews: ["让我重新梳理一下执行路径"],
+			messageContents: ["让我重新梳理一下执行路径", "最终整理后的正文"]
+		}),
+		"最终整理后的正文"
+	);
+
+	assert.equal(
+		pickBridgeFinalText({
+			finalText: "",
+			streamedText: "",
+			progressTexts: [],
+			reasoningPreviews: [],
+			messageContents: [
+				[
+					"让我先整理一下这段修改计划。",
+					"接下来我会先用 read_file 检查正文。",
+					"然后我会用 patch 写入更新。"
+				].join("\n"),
+				"最终整理后的正文"
+			]
+		}),
+		"最终整理后的正文"
+	);
 });
 
 test("composeObsidianPrompt marks the current selection as selected text", () => {

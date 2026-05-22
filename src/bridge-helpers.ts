@@ -150,12 +150,15 @@ export function buildTurnUserText(text: string, imageCount: number): string {
 }
 
 export function pickBridgeFinalText(input: PickBridgeFinalTextInput): string {
+	const reasoningPreviewTexts = dedupeNormalized(input.reasoningPreviews);
+	const isReasoningPreviewText = (text: string): boolean =>
+		reasoningPreviewTexts.some((preview) => preview === text || preview.includes(text) || text.includes(preview));
 	const candidates = [
 		normalizeText(input.finalText),
 		normalizeText(input.streamedText),
 		...dedupeNormalized(input.progressTexts),
 		...dedupeNormalized(input.messageContents)
-	];
+	].filter((text) => !looksLikeInternalReasoningText(text) && !isReasoningPreviewText(text));
 
 	return candidates.find(Boolean) ?? "";
 }

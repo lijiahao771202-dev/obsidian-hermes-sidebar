@@ -124,6 +124,10 @@ export interface ActivityMessageLike {
 	activities?: Array<ActivityTimelineEntryLike | null | undefined> | null;
 }
 
+export interface ActivityMessageCompactLike extends ActivityMessageLike, MessageKindLike {
+	role?: string | null;
+}
+
 export interface ActivityMessageVisibilityResult<T extends ActivityMessageLike = ActivityMessageLike> {
 	visibleMessages: T[];
 	hiddenCount: number;
@@ -431,6 +435,72 @@ export function getVisibleActivityMessages<T extends ActivityMessageLike>(
 	};
 }
 
+export function collapseCompletedTurnActivityMessages<T extends ActivityMessageCompactLike>(
+	messages: T[],
+	turnStartMessageId?: string,
+	preferredSurvivorId?: string
+): { messages: T[]; survivorMessageId?: string } {
+	const anchorIndex = turnStartMessageId
+		? messages.findIndex((message) => message.id === turnStartMessageId)
+		: -1;
+	if (anchorIndex < 0) {
+		return { messages };
+	}
+
+	let nextUserIndex = messages.length;
+	for (let index = anchorIndex + 1; index < messages.length; index += 1) {
+		if (messages[index].kind === "user") {
+			nextUserIndex = index;
+			break;
+		}
+	}
+
+	const activityIndexes: number[] = [];
+	for (let index = anchorIndex + 1; index < nextUserIndex; index += 1) {
+		const message = messages[index];
+		if (message.kind !== "activity" || message.role !== "assistant") {
+			continue;
+		}
+		if (!(message.activities ?? []).some((entry) => entry && shouldShowActivityEntry(entry.toolName))) {
+			continue;
+		}
+		activityIndexes.push(index);
+	}
+
+	if (activityIndexes.length <= 1) {
+		const survivorIndex = activityIndexes[0];
+		return { messages, survivorMessageId: survivorIndex !== undefined ? messages[survivorIndex]?.id ?? undefined : undefined };
+	}
+
+	const survivorIndex =
+		(preferredSurvivorId
+			? activityIndexes.find((index) => messages[index]?.id === preferredSurvivorId)
+			: undefined) ?? activityIndexes[activityIndexes.length - 1];
+	const survivor = messages[survivorIndex];
+	if (!survivor) {
+		return { messages };
+	}
+
+	const mergedActivities = activityIndexes.flatMap((index) => messages[index]?.activities ?? []);
+	const nextMessages = messages
+		.filter((_, index) => !activityIndexes.includes(index) || index === survivorIndex)
+		.map((message, index, source) => {
+			if (message !== survivor) {
+				return message;
+			}
+			return {
+				...message,
+				pending: false,
+				activities: mergedActivities
+			};
+		}) as T[];
+
+	return {
+		messages: nextMessages,
+		survivorMessageId: survivor.id ?? undefined
+	};
+}
+
 export function shouldMergeActivityEntry(
 	toolName: string | undefined,
 	currentStatus: string,
@@ -482,6 +552,35 @@ export function getAppendIndexAfterTurnMessages(messages: MessageKindLike[], tur
 		}
 	}
 	return messages.length;
+}
+
+export function getAppendIndexAfterLatestTurnAssistant(
+	messages: MessageKindLike[],
+	turnStartMessageId?: string
+): number | undefined {
+	const anchorIndex = turnStartMessageId
+		? messages.findIndex((message) => message.id === turnStartMessageId)
+		: -1;
+	if (anchorIndex < 0) {
+		return undefined;
+	}
+
+	let nextUserIndex = messages.length;
+	for (let index = anchorIndex + 1; index < messages.length; index += 1) {
+		if (messages[index].kind === "user") {
+			nextUserIndex = index;
+			break;
+		}
+	}
+
+	for (let index = nextUserIndex - 1; index > anchorIndex; index -= 1) {
+		const kind = (messages[index].kind || "").trim();
+		if (kind === "final" || kind === "write-review" || kind === "progress") {
+			return index + 1;
+		}
+	}
+
+	return undefined;
 }
 
 export function shouldRestoreComposerFocus(

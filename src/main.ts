@@ -34,8 +34,10 @@ import {
 	formatActivityTimelineSummary,
 	getContextModeDescription,
 	getActivityChainTailVisibleCount,
+	collapseCompletedTurnActivityMessages,
 	formatSelectionPreview,
 	getAppendIndexAfterTurnMessages,
+	getAppendIndexAfterLatestTurnAssistant,
 	getNextStickToBottom,
 	getRestoredScrollTop,
 	getVisibleActivityMessages,
@@ -62,7 +64,9 @@ import {
 	looksLikeInternalReasoningText
 } from "./bridge-helpers";
 import {
+	buildChatWriteReviewOverview,
 	buildChatWriteAppliedReview,
+	extractChatWriteReviewDiffSections,
 	buildChatWriteReviewInlinePreview,
 	buildChatWriteReviewRenderedMarkdownPreview,
 	buildChatWriteReviewStreamFrame,
@@ -70,10 +74,14 @@ import {
 	listChatWriteReviewMarkdownTargets,
 	resolveChatWriteReviewTargetPath,
 	shouldAutoRevealWriteReviewTarget,
+	splitChatWriteReviewDiffFiles,
+	summarizeChatWriteReviewFiles,
 	type ChatWriteAppliedReview,
+	type ChatWriteReviewDiffFile,
 	type ChatWriteReviewInlinePreview,
+	type ChatWriteReviewDiffSection,
 	type ChatWriteReviewStreamFrame,
-	type ChatWriteReviewVisibleAddition,
+	type ChatWriteReviewFileSummary,
 	type ChatWriteSnapshot
 } from "./chat-write-review-helpers";
 import { buildSelectionContextWindow } from "./inline-edit-helpers";
@@ -310,24 +318,25 @@ type HermesAppliedInlineWriteReviewStatus = "pending" | "accepted" | "reverted" 
 
 interface HermesAppliedInlineWriteReviewPayload {
 	review: HermesActivityWriteReviewControls;
-	preview: ChatWriteReviewInlinePreview;
+	previews: ChatWriteReviewInlinePreview[];
 	sourcePath: string;
 	status: HermesAppliedInlineWriteReviewStatus;
-	streamFrame: ChatWriteReviewStreamFrame;
+	streamFrames: ChatWriteReviewStreamFrame[];
 	app: App;
 	component: Plugin;
 	onAccept: (requestId: string) => void;
 	onRevert: (requestId: string) => void;
+	onLocate: (requestId: string) => void;
 }
 
 interface ActiveAppliedInlineWriteReviewState {
 	requestId: string;
 	review: HermesActivityWriteReviewControls;
-	preview: ChatWriteReviewInlinePreview;
+	previews: ChatWriteReviewInlinePreview[];
 	sourcePath: string;
 	editorView: EditorView;
 	status: HermesAppliedInlineWriteReviewStatus;
-	visibleCharacters: number;
+	visibleCharacters: number[];
 	streamTimer: number | null;
 	clearTimer: number | null;
 }
@@ -1013,6 +1022,7 @@ class HermesSidebarView extends ItemView {
 	private pendingAppliedInlineWriteFollowFrame: number | null = null;
 	private pendingWriteReviewReveal: PendingWriteReviewReveal | null = null;
 	private pendingWikiAutoCreateReview: PendingWikiAutoCreateReview | null = null;
+	private pendingWriteReviewMessages: HermesActivityWriteReviewControls[] = [];
 	private pendingThinkingScrollFrame: number | null = null;
 	private pendingThinkingScrollTimeouts: number[] = [];
 
@@ -1543,6 +1553,16 @@ class HermesSidebarView extends ItemView {
 		if (message.kind === "activity" && !this.hasVisibleActivities(message)) {
 			return null;
 		}
+		if (message.kind === "write-review" && message.writeReview) {
+			const row = this.messagesEl.createDiv({
+				cls: "hermes-sidebar-chat-row is-write-review"
+			});
+			if (message.id) {
+				row.dataset.hermesMessageId = message.id;
+			}
+			this.renderAppliedWriteReviewMessage(row, message.writeReview);
+			return { row, bubble: row, body: row };
+		}
 		const hasAttachments = (message.attachments ?? []).length > 0;
 
 		const row = this.messagesEl.createDiv({
@@ -1597,11 +1617,7 @@ class HermesSidebarView extends ItemView {
 			cls: "hermes-sidebar-message-body"
 		});
 		if (!options.deferBodyRender) {
-			if (message.kind === "write-review" && message.writeReview) {
-				this.renderAppliedWriteReviewMessage(body, message.writeReview);
-			} else {
-				void this.renderMarkdownInto(body, message.content);
-			}
+			void this.renderMarkdownInto(body, message.content);
 		}
 		this.renderMessageAttachments(bubble, message);
 		return { row, bubble, body };
@@ -2489,9 +2505,9 @@ class HermesSidebarView extends ItemView {
 		}
 		const entry: HermesActivityEntry = {
 			id: `activity-${Date.now()}-${++this.activityCounter}`,
-			text: "已应用写入，可在对话中审阅 Diff",
+			text: "已应用写入，可在原文中审阅 Diff",
 			toolName: "write_trace",
-			preview: review.filePath ? `Diff 审阅：${review.filePath}` : "Diff 审阅已生成",
+			preview: review.filePath ? `原文审阅：${review.filePath}` : "原文审阅已生成",
 			status: "done",
 			createdAt: Date.now()
 		};
@@ -2507,8 +2523,8 @@ class HermesSidebarView extends ItemView {
 			snapshots: review.snapshots,
 			status: review.status
 		};
-		this.appendAppliedWriteReviewMessage(controls);
-		this.statusText = "已应用写入，可在对话中审阅 Diff";
+		this.queueAppliedWriteReviewMessage(controls);
+		this.statusText = "已应用写入，可在原文中审阅 Diff";
 		void this.showAppliedInlineWriteReview(controls);
 	}
 
@@ -2921,6 +2937,25 @@ class HermesSidebarView extends ItemView {
 		}
 	}
 
+	private collapseCompletedActivityChain(): void {
+		const session = this.plugin.getActiveSession();
+		const result = collapseCompletedTurnActivityMessages(
+			session.messages,
+			this.activeTurnUserMessageId,
+			this.activeActivityMessageId
+		);
+		session.messages = result.messages;
+		this.activityEntries = this.activityEntries.filter((entry) => shouldShowActivityEntry(entry.toolName));
+		this.activeActivityMessageId = result.survivorMessageId;
+		this.activityMessageRef = result.survivorMessageId
+			? session.messages.find((message) => message.id === result.survivorMessageId && message.kind === "activity")
+			: undefined;
+		this.activityRowEl = undefined;
+		this.activityBubbleEl = undefined;
+		this.activityTimelineEl = undefined;
+		this.expandedActivityGroupIds.clear();
+	}
+
 	private async handlePasteImages(event: ClipboardEvent): Promise<void> {
 		const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
 		if (files.length === 0) {
@@ -3133,6 +3168,7 @@ class HermesSidebarView extends ItemView {
 						this.lastUsage = event.usage;
 						this.finalizeActiveStream(event.text);
 						this.settleInlineActivityTimeline();
+						this.collapseCompletedActivityChain();
 						this.activeStreamingMessageIndex = null;
 						hasFinalized = true;
 						this.statusText = this.formatConnectionStatus(session.sessionId, event.usage);
@@ -3151,6 +3187,7 @@ class HermesSidebarView extends ItemView {
 			if (!hasFinalized) {
 				this.finalizeActiveStream(result.text);
 				this.settleInlineActivityTimeline();
+				this.collapseCompletedActivityChain();
 				this.activeStreamingMessageIndex = null;
 				hasFinalized = true;
 			}
@@ -3187,6 +3224,7 @@ class HermesSidebarView extends ItemView {
 			}
 			this.activeRunCancel = undefined;
 			this.isSending = false;
+			this.flushPendingWriteReviewMessages();
 			this.settleInlineActivityTimeline();
 			this.scheduleMessagesToBottom();
 		}
@@ -3200,16 +3238,41 @@ class HermesSidebarView extends ItemView {
 		this.activeRunCancel();
 	}
 
+	private queueAppliedWriteReviewMessage(review: HermesActivityWriteReviewControls): void {
+		const existingIndex = this.pendingWriteReviewMessages.findIndex((item) => item.requestId === review.requestId);
+		if (existingIndex >= 0) {
+			this.pendingWriteReviewMessages[existingIndex] = review;
+			return;
+		}
+		this.pendingWriteReviewMessages.push(review);
+	}
+
+	private flushPendingWriteReviewMessages(): void {
+		if (this.pendingWriteReviewMessages.length === 0) {
+			return;
+		}
+		const pending = [...this.pendingWriteReviewMessages];
+		this.pendingWriteReviewMessages = [];
+		for (const review of pending) {
+			this.appendAppliedWriteReviewMessage(review);
+		}
+	}
+
 	private appendAppliedWriteReviewMessage(review: HermesActivityWriteReviewControls): void {
 		const session = this.plugin.getActiveSession();
-		this.appendTurnMessage(session, {
+		const message: HermesMessage = {
 			id: this.nextMessageId("write-review"),
 			role: "assistant",
 			kind: "write-review",
 			content: "",
 			pending: false,
 			writeReview: review
-		});
+		};
+		const insertIndex =
+			getAppendIndexAfterLatestTurnAssistant(session.messages, this.activeTurnUserMessageId) ??
+			getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
+		session.messages.splice(insertIndex, 0, message);
+		this.activeStreamingMessageIndex = adjustIndexAfterInsertion(this.activeStreamingMessageIndex, insertIndex);
 		this.persistActiveSession(false);
 		this.render(false);
 		this.scheduleMessagesToBottom();
@@ -3217,92 +3280,134 @@ class HermesSidebarView extends ItemView {
 
 	private renderAppliedWriteReviewMessage(container: HTMLElement, review: HermesActivityWriteReviewControls): void {
 		const status = review.status ?? "pending";
+		const overview = buildChatWriteReviewOverview(review, 3);
 		const root = container.createDiv({ cls: `hermes-write-review-card is-${status}` });
 		const header = root.createDiv({ cls: "hermes-write-review-header" });
-		const titleWrap = header.createDiv({ cls: "hermes-write-review-title-wrap" });
-		titleWrap.createDiv({ cls: "hermes-write-review-kicker", text: "本次写入审阅" });
-		titleWrap.createDiv({ cls: "hermes-write-review-title", text: review.title || "Hermes 已写入" });
-		header.createDiv({
-			cls: `hermes-write-review-status is-${status}`,
-			text: getAppliedWriteReviewStatusLabel(status)
-		});
-		const summary = summarizeAppliedReviewFiles(review);
-		root.createDiv({
-			cls: "hermes-write-review-summary",
-			text: review.meta || `${summary.length} 个文件变更`
-		});
-		if (review.filePath) {
-			root.createEl("code", { cls: "hermes-write-review-path", text: review.filePath });
-		}
-		const fileList = root.createDiv({ cls: "hermes-write-review-files" });
-		for (const file of summary) {
-			this.renderAppliedWriteReviewFile(fileList, file, review);
-		}
-		this.renderAppliedWriteReviewControls(root, review);
-	}
-
-	private renderAppliedWriteReviewFile(
-		container: HTMLElement,
-		file: AppliedReviewFileSummary,
-		review: HermesActivityWriteReviewControls
-	): void {
-		const fileEl = container.createEl("details", {
-			cls: `hermes-write-review-file is-${file.kind}`,
-			attr: { open: "true" }
-		});
-		const summary = fileEl.createEl("summary", { cls: "hermes-write-review-file-summary" });
-		summary.createSpan({ cls: `hermes-write-review-file-kind is-${file.kind}`, text: getAppliedReviewFileKindLabel(file.kind) });
-		summary.createSpan({ cls: "hermes-write-review-file-path", text: file.path });
-		summary.createSpan({
-			cls: "hermes-write-review-file-stats",
-			text: `+${file.additions.length} / -${file.removals.length}`
-		});
-		const body = fileEl.createDiv({ cls: "hermes-write-review-file-body" });
-		if (file.removals.length > 0) {
-			const block = body.createDiv({ cls: "hermes-write-review-delete-block" });
-			block.createDiv({ cls: "hermes-write-review-section-label", text: "删除" });
-			block.createEl("pre", {
-				cls: "hermes-write-review-delete-source",
-				text: file.removals.join("\n")
+		const hero = header.createDiv({ cls: "hermes-write-review-hero" });
+		const iconWrap = hero.createDiv({ cls: "hermes-write-review-icon" });
+		setIcon(iconWrap, "file-pen-line");
+		const titleWrap = hero.createDiv({ cls: "hermes-write-review-title-wrap" });
+		titleWrap.createDiv({ cls: "hermes-write-review-title", text: buildWriteReviewChatTitle(overview.fileCount) });
+		const statRow = titleWrap.createDiv({ cls: "hermes-write-review-stat-row" });
+		statRow.createSpan({ cls: "hermes-write-review-additions", text: `+${overview.additions}` });
+		statRow.createSpan({ cls: "hermes-write-review-removals", text: `-${overview.removals}` });
+		const meta = buildWriteReviewChatSummary(review, overview.fileCount);
+		if (meta) {
+			root.createDiv({
+				cls: "hermes-write-review-summary",
+				text: meta
 			});
 		}
-		if (file.additions.length > 0) {
-			const block = body.createDiv({ cls: "hermes-write-review-add-block" });
-			block.createDiv({ cls: "hermes-write-review-section-label", text: "新增 / Markdown 预览" });
-			const markdownEl = block.createDiv({ cls: "hermes-write-review-markdown markdown-rendered" });
+		this.renderAppliedWriteReviewControls(header, review);
+		this.renderAppliedWriteReviewFileOverview(root, overview.visibleFiles, overview.hiddenFiles, review);
+	}
+
+	private renderAppliedWriteReviewFileOverview(
+		container: HTMLElement,
+		visibleFiles: ChatWriteReviewFileSummary[],
+		hiddenFiles: ChatWriteReviewFileSummary[],
+		review: HermesActivityWriteReviewControls
+	): void {
+		if (visibleFiles.length === 0 && hiddenFiles.length === 0) {
+			return;
+		}
+		const list = container.createDiv({ cls: "hermes-write-review-file-overview" });
+		for (const file of visibleFiles) {
+			this.renderAppliedWriteReviewFileRow(list, file, review);
+		}
+		if (hiddenFiles.length <= 0) {
+			return;
+		}
+		const details = list.createEl("details", { cls: "hermes-write-review-file-more" });
+		const summary = details.createEl("summary", { cls: "hermes-write-review-file-more-summary" });
+		summary.createSpan({
+			cls: "hermes-write-review-file-more-label",
+			text: `再显示 ${hiddenFiles.length} 个文件`
+		});
+		const chevron = summary.createSpan({ cls: "hermes-write-review-file-more-chevron" });
+		setIcon(chevron, "chevron-down");
+		const body = details.createDiv({ cls: "hermes-write-review-file-more-body" });
+		for (const file of hiddenFiles) {
+			this.renderAppliedWriteReviewFileRow(body, file, review);
+		}
+	}
+
+	private renderAppliedWriteReviewFileRow(
+		container: HTMLElement,
+		file: ChatWriteReviewFileSummary,
+		review: HermesActivityWriteReviewControls
+	): void {
+		const diffFile = splitChatWriteReviewDiffFiles(review).find((item) => item.path === file.path);
+		const sections = extractChatWriteReviewDiffSections(diffFile?.diff || "");
+		const row = container.createEl("details", {
+			cls: "hermes-write-review-file-item"
+		});
+		const summary = row.createEl("summary", { cls: "hermes-write-review-file-row" });
+		summary.createSpan({ cls: `hermes-write-review-file-kind is-${file.kind}`, text: getAppliedReviewFileKindLabel(file.kind) });
+		summary.createSpan({ cls: "hermes-write-review-file-path", text: file.path });
+		const stats = summary.createDiv({ cls: "hermes-write-review-file-stats" });
+		stats.createSpan({ cls: "hermes-write-review-additions", text: `+${file.additions.length}` });
+		stats.createSpan({ cls: "hermes-write-review-removals", text: `-${file.removals.length}` });
+		if (sections.length === 0) {
+			return;
+		}
+		const body = row.createDiv({ cls: "hermes-write-review-file-preview" });
+		const scroll = body.createDiv({ cls: "hermes-write-review-file-preview-scroll" });
+		for (const section of sections) {
+			if (section.type === "remove") {
+				const block = scroll.createDiv({ cls: "hermes-write-review-inline-block is-remove" });
+				block.createDiv({ cls: "hermes-write-review-inline-label", text: "删除" });
+				block.createEl("pre", {
+					cls: "hermes-write-review-inline-pre",
+					text: section.text || "(空行)"
+				});
+				continue;
+			}
+			const block = scroll.createDiv({ cls: "hermes-write-review-inline-block is-add" });
+			block.createDiv({ cls: "hermes-write-review-inline-label", text: "新增" });
+			const markdownEl = block.createDiv({
+				cls: "hermes-write-review-inline-markdown markdown-rendered"
+			});
 			window.requestAnimationFrame(() => {
 				if (!markdownEl.isConnected) {
 					return;
 				}
 				void MarkdownRenderer.render(
 					this.app,
-					file.additions.join("\n") || "*（空内容）*",
+					section.text || "*（空内容）*",
 					markdownEl,
 					resolveReviewRenderSourcePath(file.path, review.filePath),
 					this.plugin
 				);
 			});
 		}
-		if (file.additions.length === 0 && file.removals.length === 0) {
-			body.createDiv({ cls: "hermes-write-review-empty", text: "这个文件没有可预览的 Markdown 片段。" });
-		}
 	}
 
 	private renderAppliedWriteReviewControls(container: HTMLElement, review: HermesActivityWriteReviewControls): void {
 		const status = review.status ?? "pending";
 		const controls = container.createDiv({ cls: "hermes-write-review-actions" });
+		const locate = controls.createEl("button", {
+			cls: "hermes-write-review-button",
+			text: "定位",
+			attr: { type: "button" }
+		});
 		const revert = controls.createEl("button", {
 			cls: "hermes-write-review-button",
-			text: status === "reverted" ? "已回退" : "回退",
+			text: status === "reverted" ? "已撤销" : "撤销",
 			attr: { type: "button" }
 		});
 		const accept = controls.createEl("button", {
 			cls: "hermes-write-review-button is-accept",
-			text: status === "accepted" ? "已接受" : status === "reverted" ? "不可接受" : "接受",
+			text: status === "accepted" ? "已接受" : "接受",
 			attr: { type: "button" }
 		});
-		revert.disabled = status !== "pending";
-		accept.disabled = status !== "pending";
+		revert.disabled = status === "reverted";
+		accept.disabled = status === "accepted" || status === "reverted";
+		locate.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			void this.locateAppliedWriteReview(review.requestId);
+		});
 		revert.addEventListener("click", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
@@ -3317,7 +3422,15 @@ class HermesSidebarView extends ItemView {
 
 	private acceptAppliedWriteReview(requestId: string): void {
 		const review = this.findAppliedWriteReview(requestId);
-		if (!review || review.status !== "pending") {
+		if (!review) {
+			if (this.updatePendingAppliedWriteReview(requestId, (current) => ({ ...current, status: "accepted" }))) {
+				this.statusText = "已接受这次写入";
+				this.scheduleAppliedInlineWriteReviewClear(1000);
+				new Notice("Hermes 已接受这次写入");
+			}
+			return;
+		}
+		if (review.status !== "pending") {
 			return;
 		}
 		this.updateAppliedWriteReview(requestId, (current) => ({ ...current, status: "accepted" }));
@@ -3328,11 +3441,34 @@ class HermesSidebarView extends ItemView {
 			this.syncAppliedInlineWriteReviewDecorations();
 			this.scheduleAppliedInlineWriteReviewClear(1000);
 		}
+		new Notice("Hermes 已接受这次写入");
+	}
+
+	private async locateAppliedWriteReview(requestId: string): Promise<void> {
+		const review = this.findAppliedWriteReview(requestId) ?? this.pendingWriteReviewMessages.find((item) => item.requestId === requestId);
+		if (!review) {
+			this.statusText = "无法定位这次写入审阅";
+			return;
+		}
+		await this.showAppliedInlineWriteReview(review);
 	}
 
 	private async revertAppliedWriteReview(requestId: string): Promise<void> {
 		const review = this.findAppliedWriteReview(requestId);
-		if (!review || review.status === "reverted") {
+		if (!review) {
+			const pending = this.pendingWriteReviewMessages.find((item) => item.requestId === requestId);
+			if (!pending || pending.status === "reverted") {
+				return;
+			}
+			this.updatePendingAppliedWriteReview(requestId, (current) => ({ ...current, status: "reverted" }));
+			for (const snapshot of pending.snapshots ?? []) {
+				await this.restoreWriteSnapshot(snapshot);
+			}
+			this.statusText = "已拒绝这次写入";
+			new Notice("Hermes 已拒绝这次写入");
+			return;
+		}
+		if (review.status === "reverted") {
 			return;
 		}
 		try {
@@ -3345,8 +3481,8 @@ class HermesSidebarView extends ItemView {
 			for (const snapshot of review.snapshots ?? []) {
 				await this.restoreWriteSnapshot(snapshot);
 			}
-			this.statusText = "已撤销这次写入";
-			new Notice("Hermes 已撤销这次写入");
+			this.statusText = "已拒绝这次写入";
+			new Notice("Hermes 已拒绝这次写入");
 			if (this.activeAppliedInlineWriteReview?.requestId === requestId) {
 				this.scheduleAppliedInlineWriteReviewClear(1200);
 			}
@@ -3358,18 +3494,18 @@ class HermesSidebarView extends ItemView {
 				active.status = "error";
 				this.syncAppliedInlineWriteReviewDecorations();
 			}
-			this.statusText = `撤销失败：${message}`;
-			new Notice(`撤销失败：${message}`);
+			this.statusText = `拒绝失败：${message}`;
+			new Notice(`拒绝失败：${message}`);
 		}
 	}
 
 	private async showAppliedInlineWriteReview(review: HermesActivityWriteReviewControls): Promise<void> {
-		const preview = buildChatWriteReviewInlinePreview(review);
-		if (!preview) {
+		const previews = this.buildAppliedInlineWriteReviewPreviews(review);
+		if (previews.length === 0) {
 			this.statusText = "已应用写入，但无法在原文定位 Markdown Diff";
 			return;
 		}
-		const targetFile = this.plugin.resolveWriteReviewMarkdownFile(review.filePath ?? preview.filePath);
+		const targetFile = this.plugin.resolveWriteReviewMarkdownFile(previews[0]?.filePath ?? review.filePath);
 		if (!targetFile) {
 			this.statusText = "已应用写入，但无法定位目标 Markdown 文件";
 			return;
@@ -3381,26 +3517,38 @@ class HermesSidebarView extends ItemView {
 			return;
 		}
 		await nextAnimationFrame();
-		this.startAppliedInlineWriteReview(editorView, review, preview, targetFile.path);
+		this.statusText = `正在原文定位 Diff：${previews[0]?.filePath ?? review.filePath ?? "当前文件"}`;
+		this.startAppliedInlineWriteReview(editorView, review, previews, targetFile.path);
+	}
+
+	private buildAppliedInlineWriteReviewPreviews(review: HermesActivityWriteReviewControls): ChatWriteReviewInlinePreview[] {
+		const direct = buildChatWriteReviewInlinePreview(review);
+		if (direct) {
+			return [direct];
+		}
+		return splitChatWriteReviewDiffFiles(review)
+			.map((file) => buildChatWriteReviewInlinePreview({ filePath: file.path, diff: file.diff }))
+			.filter((preview): preview is ChatWriteReviewInlinePreview => Boolean(preview));
 	}
 
 	private startAppliedInlineWriteReview(
 		editorView: EditorView,
 		review: HermesActivityWriteReviewControls,
-		preview: ChatWriteReviewInlinePreview,
+		previews: ChatWriteReviewInlinePreview[],
 		sourcePath: string
 	): void {
 		this.clearAppliedInlineWriteReview();
-		const visibleCharacters = getChatWriteReviewTotalAddedCharacters(preview);
-		const anchorLineNumber = Math.max(1, Math.min(editorView.state.doc.lines, preview.firstLine + 1));
+		const visibleCharacters = previews.map((preview) => getChatWriteReviewTotalAddedCharacters(preview));
+		const firstPreview = previews[0];
+		const anchorLineNumber = Math.max(1, Math.min(editorView.state.doc.lines, (firstPreview?.firstLine ?? 0) + 1));
 		const anchorLine = editorView.state.doc.line(anchorLineNumber);
 		this.activeAppliedInlineWriteReview = {
 			requestId: review.requestId,
 			review,
-			preview,
+			previews,
 			sourcePath,
 			editorView,
-			status: "pending",
+			status: review.status ?? "pending",
 			visibleCharacters,
 			streamTimer: null,
 			clearTimer: null
@@ -3410,6 +3558,7 @@ class HermesSidebarView extends ItemView {
 			selection: { anchor: anchorLine.from },
 			scrollIntoView: true
 		});
+		window.requestAnimationFrame(() => this.syncAppliedInlineWriteReviewDecorations());
 	}
 
 	private syncAppliedInlineWriteReviewDecorations(): void {
@@ -3425,14 +3574,17 @@ class HermesSidebarView extends ItemView {
 		active.editorView.dispatch({
 			effects: setHermesAppliedInlineWriteReviewEffect.of({
 				review: active.review,
-				preview: active.preview,
+				previews: active.previews,
 				sourcePath: active.sourcePath,
 				status: active.status,
-				streamFrame: buildChatWriteReviewStreamFrame(active.preview, active.visibleCharacters),
+				streamFrames: active.previews.map((preview, index) =>
+					buildChatWriteReviewStreamFrame(preview, active.visibleCharacters[index] ?? getChatWriteReviewTotalAddedCharacters(preview))
+				),
 				app: this.app,
 				component: this.plugin,
 				onAccept: (requestId) => this.acceptAppliedWriteReview(requestId),
-				onRevert: (requestId) => void this.revertAppliedWriteReview(requestId)
+				onRevert: (requestId) => void this.revertAppliedWriteReview(requestId),
+				onLocate: (requestId) => void this.locateAppliedWriteReview(requestId)
 			})
 		});
 	}
@@ -3517,6 +3669,23 @@ class HermesSidebarView extends ItemView {
 			this.persistActiveSession(false);
 			this.refreshWriteReviewMessage(targetMessage);
 		}
+	}
+
+	private updatePendingAppliedWriteReview(
+		requestId: string,
+		update: (review: HermesActivityWriteReviewControls) => HermesActivityWriteReviewControls
+	): boolean {
+		const pendingIndex = this.pendingWriteReviewMessages.findIndex((review) => review.requestId === requestId);
+		if (pendingIndex < 0) {
+			return false;
+		}
+		this.pendingWriteReviewMessages[pendingIndex] = update(this.pendingWriteReviewMessages[pendingIndex]);
+		const active = this.activeAppliedInlineWriteReview;
+		if (active?.requestId === requestId) {
+			active.status = this.pendingWriteReviewMessages[pendingIndex].status ?? active.status;
+			this.syncAppliedInlineWriteReviewDecorations();
+		}
+		return true;
 	}
 
 	private refreshWriteReviewMessage(target: HermesMessage): void {
@@ -3675,7 +3844,8 @@ class HermesAppliedInlineWriteReviewWidget extends WidgetType {
 			other instanceof HermesAppliedInlineWriteReviewWidget &&
 			other.payload.review.requestId === this.payload.review.requestId &&
 			other.payload.status === this.payload.status &&
-			other.payload.streamFrame.visibleCharacters === this.payload.streamFrame.visibleCharacters &&
+			other.payload.streamFrames.map((frame) => frame.visibleCharacters).join(",") ===
+				this.payload.streamFrames.map((frame) => frame.visibleCharacters).join(",") &&
 			other.payload.review.diff === this.payload.review.diff
 		);
 	}
@@ -3707,11 +3877,18 @@ class HermesAppliedInlineWriteReviewWidget extends WidgetType {
 	}
 
 	private renderDiffPreview(root: HTMLElement): void {
-		const sections = extractAppliedInlineReviewSections(this.payload.review.diff ?? "");
-		const fallbackMarkdown = buildChatWriteReviewRenderedMarkdownPreview(
-			this.payload.preview,
-			this.payload.streamFrame.visibleCharacters
-		).text;
+		const files = splitChatWriteReviewDiffFiles(this.payload.review);
+		if (files.length > 1) {
+			this.renderFileDiffPreviews(root, files);
+			return;
+		}
+		const sections = extractAppliedInlineReviewSections(files[0]?.diff || this.payload.review.diff || "");
+		const firstPreview = this.payload.previews[0];
+		const firstFrame = this.payload.streamFrames[0];
+		const fallbackMarkdown =
+			firstPreview && firstFrame
+				? buildChatWriteReviewRenderedMarkdownPreview(firstPreview, firstFrame.visibleCharacters).text
+				: "";
 		if (sections.length === 0 && fallbackMarkdown) {
 			sections.push({ type: "add", text: fallbackMarkdown });
 		}
@@ -3752,12 +3929,66 @@ class HermesAppliedInlineWriteReviewWidget extends WidgetType {
 		}
 	}
 
+	private renderFileDiffPreviews(root: HTMLElement, files: ChatWriteReviewDiffFile[]): void {
+		for (const file of files) {
+			const fileEl = root.createDiv({ cls: `hermes-chat-inline-review-file is-${file.kind}` });
+			const header = fileEl.createDiv({ cls: "hermes-chat-inline-review-file-header" });
+			header.createSpan({ cls: `hermes-chat-inline-review-file-kind is-${file.kind}`, text: getAppliedReviewFileKindLabel(file.kind) });
+			header.createSpan({ cls: "hermes-chat-inline-review-file-path", text: file.path });
+			header.createSpan({
+				cls: "hermes-chat-inline-review-file-stats",
+				text: `+${file.additions.length} / -${file.removals.length}`
+			});
+			const sections = extractAppliedInlineReviewSections(file.diff);
+			if (sections.length === 0) {
+				fileEl.createDiv({
+					cls: "hermes-chat-inline-review-caption",
+					text: "这个文件没有可预览的 Markdown 片段。"
+				});
+				continue;
+			}
+			for (const section of sections) {
+				if (section.type === "remove") {
+					const block = fileEl.createDiv({ cls: "hermes-chat-inline-review-delete-block" });
+					block.createDiv({ cls: "hermes-chat-inline-review-add-marker", text: "删除" });
+					block.createEl("pre", {
+						cls: "hermes-chat-inline-review-delete-source",
+						text: section.text || "(空行)"
+					});
+					continue;
+				}
+				const block = fileEl.createDiv({ cls: "hermes-chat-inline-review-addition is-done" });
+				block.createDiv({ cls: "hermes-chat-inline-review-add-marker", text: "新增 / Markdown 预览" });
+				const markdownEl = block.createDiv({
+					cls: "hermes-chat-inline-review-add-markdown markdown-rendered"
+				});
+				window.requestAnimationFrame(() => {
+					if (!markdownEl.isConnected) {
+						return;
+					}
+					void MarkdownRenderer.render(
+						this.payload.app,
+						section.text || "*（空内容）*",
+						markdownEl,
+						resolveReviewRenderSourcePath(file.path, this.payload.review.filePath),
+						this.payload.component
+					);
+				});
+			}
+		}
+	}
+
 	private renderControls(root: HTMLElement): void {
 		const status = this.payload.status;
 		const controls = root.createDiv({ cls: "hermes-inline-controls hermes-chat-inline-review-actions" });
 		const revert = controls.createEl("button", {
 			cls: "hermes-inline-control hermes-chat-inline-review-action",
-			text: status === "reverted" ? "已回退" : "回退",
+			text: status === "reverted" ? "已拒绝" : "拒绝",
+			attr: { type: "button" }
+		});
+		const locate = controls.createEl("button", {
+			cls: "hermes-inline-control hermes-chat-inline-review-action",
+			text: "定位",
 			attr: { type: "button" }
 		});
 		const accept = controls.createEl("button", {
@@ -3768,11 +3999,17 @@ class HermesAppliedInlineWriteReviewWidget extends WidgetType {
 		revert.disabled = status !== "pending";
 		accept.disabled = status !== "pending";
 		revert.addEventListener("mousedown", (event) => event.preventDefault());
+		locate.addEventListener("mousedown", (event) => event.preventDefault());
 		accept.addEventListener("mousedown", (event) => event.preventDefault());
 		revert.addEventListener("click", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
 			this.payload.onRevert(this.payload.review.requestId);
+		});
+		locate.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			this.payload.onLocate(this.payload.review.requestId);
 		});
 		accept.addEventListener("click", (event) => {
 			event.preventDefault();
@@ -4314,7 +4551,7 @@ function buildHermesAppliedInlineWriteReviewDecorations(
 	if (!payload) {
 		return Decoration.none;
 	}
-	const anchorLineNumber = Math.max(1, Math.min(doc.lines, payload.preview.firstLine + 1));
+	const anchorLineNumber = Math.max(1, Math.min(doc.lines, (payload.previews[0]?.firstLine ?? 0) + 1));
 	const anchor = doc.line(anchorLineNumber).from;
 	return Decoration.set(
 		[
@@ -4364,17 +4601,6 @@ type AppliedInlineReviewSection = {
 	text: string;
 };
 
-type AppliedReviewFileKind = "created" | "deleted" | "modified";
-
-interface AppliedReviewFileSummary {
-	path: string;
-	oldPath?: string;
-	newPath?: string;
-	kind: AppliedReviewFileKind;
-	additions: string[];
-	removals: string[];
-}
-
 function extractAppliedInlineReviewSections(diff: string): AppliedInlineReviewSection[] {
 	const sections: AppliedInlineReviewSection[] = [];
 	let currentType: AppliedInlineReviewSection["type"] | null = null;
@@ -4422,90 +4648,7 @@ function extractAppliedInlineReviewSections(diff: string): AppliedInlineReviewSe
 	return sections.filter((section) => section.text.length > 0);
 }
 
-function summarizeAppliedReviewFiles(review: HermesActivityWriteReviewControls): AppliedReviewFileSummary[] {
-	const files: AppliedReviewFileSummary[] = [];
-	let current: AppliedReviewFileSummary | null = null;
-
-	const normalizeDiffPath = (path: string): string => {
-		const trimmed = path.trim();
-		if (!trimmed || trimmed === "/dev/null") {
-			return "";
-		}
-		return trimmed.replace(/^[ab]\//, "");
-	};
-	const ensureCurrent = () => {
-		if (!current) {
-			const fallbackPath = review.filePath?.trim() || "未命名写入";
-			current = {
-				path: fallbackPath,
-				kind: "modified",
-				additions: [],
-				removals: []
-			};
-		}
-		return current;
-	};
-	const finish = () => {
-		if (!current) {
-			return;
-		}
-		const oldPath = current.oldPath ?? "";
-		const newPath = current.newPath ?? "";
-		current.path = newPath || oldPath || current.path;
-		current.kind = oldPath && !newPath ? "deleted" : !oldPath && newPath ? "created" : "modified";
-		files.push(current);
-		current = null;
-	};
-
-	for (const line of (review.diff ?? "").split("\n")) {
-		if (line.startsWith("diff --git ")) {
-			finish();
-			current = {
-				path: review.filePath?.trim() || "未命名写入",
-				kind: "modified",
-				additions: [],
-				removals: []
-			};
-			continue;
-		}
-		if (line.startsWith("--- ")) {
-			const next = ensureCurrent();
-			next.oldPath = normalizeDiffPath(line.slice(4));
-			continue;
-		}
-		if (line.startsWith("+++ ")) {
-			const next = ensureCurrent();
-			next.newPath = normalizeDiffPath(line.slice(4));
-			continue;
-		}
-		if (!line || line.startsWith("@@") || line.startsWith("index ")) {
-			continue;
-		}
-		if (line.startsWith("+")) {
-			ensureCurrent().additions.push(line.slice(1));
-			continue;
-		}
-		if (line.startsWith("-")) {
-			ensureCurrent().removals.push(line.slice(1));
-		}
-	}
-	finish();
-
-	if (files.length > 0) {
-		return files;
-	}
-	const fallbackSections = extractAppliedInlineReviewSections(review.diff ?? "");
-	return [
-		{
-			path: review.filePath?.trim() || "未命名写入",
-			kind: "modified",
-			additions: fallbackSections.filter((section) => section.type === "add").flatMap((section) => section.text.split("\n")),
-			removals: fallbackSections.filter((section) => section.type === "remove").flatMap((section) => section.text.split("\n"))
-		}
-	];
-}
-
-function getAppliedReviewFileKindLabel(kind: AppliedReviewFileKind): string {
+function getAppliedReviewFileKindLabel(kind: ChatWriteReviewDiffFile["kind"]): string {
 	if (kind === "created") {
 		return "新增";
 	}
@@ -4513,6 +4656,14 @@ function getAppliedReviewFileKindLabel(kind: AppliedReviewFileKind): string {
 		return "删除";
 	}
 	return "修改";
+}
+
+function buildWriteReviewChatSummary(review: HermesActivityWriteReviewControls, fileCount: number): string {
+	return review.meta?.trim() ?? (fileCount > 0 ? `Diff 已在原文中显示` : "");
+}
+
+function buildWriteReviewChatTitle(fileCount: number): string {
+	return fileCount > 0 ? `已编辑 ${fileCount} 个文件` : "已编辑文件";
 }
 
 function resolveReviewRenderSourcePath(filePath: string, fallbackFilePath?: string): string {
@@ -4556,10 +4707,10 @@ function getAppliedWriteReviewStatusLabel(status: NonNullable<HermesActivityWrit
 		return "已接受";
 	}
 	if (status === "reverted") {
-		return "已回退";
+		return "已拒绝";
 	}
 	if (status === "error") {
-		return "回退失败";
+		return "拒绝失败";
 	}
 	return "待审阅";
 }

@@ -18,6 +18,7 @@ from hermes_bridge import (
     install_write_review_handlers,
     append_reasoning_activity_preview,
     should_display_reasoning_delta,
+    looks_like_internal_reasoning_text,
     pick_bridge_final_text,
     preprocess_bridge_images,
     should_emit_reasoning_activity,
@@ -47,15 +48,18 @@ class HermesBridgeHelpersTest(unittest.TestCase):
 
     def test_reasoning_delta_deduplicates_cumulative_snapshots(self):
         previous = ""
-        delta, previous = extract_new_reasoning_delta(previous, "让我先搜")
+        delta, previous, replace = extract_new_reasoning_delta(previous, "让我先搜")
         self.assertEqual(delta, "让我先搜")
+        self.assertFalse(replace)
 
-        delta, previous = extract_new_reasoning_delta(previous, "让我先搜索一下")
+        delta, previous, replace = extract_new_reasoning_delta(previous, "让我先搜索一下")
         self.assertEqual(delta, "索一下")
+        self.assertFalse(replace)
 
-        delta, previous = extract_new_reasoning_delta(previous, "让我先搜索一下")
+        delta, previous, replace = extract_new_reasoning_delta(previous, "让我先搜索一下")
         self.assertEqual(delta, "")
         self.assertEqual(previous, "让我先搜索一下")
+        self.assertFalse(replace)
 
     def test_reasoning_activity_preview_appends_only_new_delta(self):
         buffer = []
@@ -69,10 +73,21 @@ class HermesBridgeHelpersTest(unittest.TestCase):
         self.assertEqual("".join(buffer), "让我先搜索一下网关实现")
         self.assertEqual(preview.count("让我先搜索一下"), 1)
 
+    def test_reasoning_activity_preview_replaces_rewritten_snapshot(self):
+        buffer = []
+        preview, previous = append_reasoning_activity_preview(buffer, "", "我先检查旧路径，然后写入。")
+        self.assertEqual(preview, "我先检查旧路径，然后写入。")
+        preview, previous = append_reasoning_activity_preview(buffer, previous, "重新梳理：我先检查新路径，然后写入。")
+
+        self.assertEqual(preview, "重新梳理：我先检查新路径，然后写入。")
+        self.assertEqual(previous, "重新梳理：我先检查新路径，然后写入。")
+        self.assertEqual("".join(buffer), "重新梳理：我先检查新路径，然后写入。")
+
     def test_reasoning_delta_deduplicates_overlapping_snapshots(self):
-        delta, previous = extract_new_reasoning_delta("让我先搜索一下", "搜索一下网关实现")
+        delta, previous, replace = extract_new_reasoning_delta("让我先搜索一下", "搜索一下网关实现")
         self.assertEqual(delta, "网关实现")
         self.assertEqual(previous, "让我先搜索一下网关实现")
+        self.assertFalse(replace)
 
     def test_reasoning_delta_filters_tool_step_fragments(self):
         self.assertFalse(should_display_reasoning_delta("正在调用 search_files"))
@@ -201,6 +216,36 @@ class HermesBridgeHelpersTest(unittest.TestCase):
                 message_contents=["", "最后一条消息"],
             ),
             "最后一条消息",
+        )
+
+        self.assertEqual(
+            pick_bridge_final_text(
+                final_text="",
+                streamed_text="",
+                progress_texts=[],
+                reasoning_previews=["让我重新梳理一下执行路径"],
+                message_contents=["让我重新梳理一下执行路径", "最终整理后的正文"],
+            ),
+            "最终整理后的正文",
+        )
+
+        leaked_reasoning = "\n".join(
+            [
+                "让我先整理一下这段修改计划。",
+                "接下来我会先用 read_file 检查正文。",
+                "然后我会用 patch 写入更新。",
+            ]
+        )
+        self.assertTrue(looks_like_internal_reasoning_text(leaked_reasoning))
+        self.assertEqual(
+            pick_bridge_final_text(
+                final_text="",
+                streamed_text="",
+                progress_texts=[],
+                reasoning_previews=[],
+                message_contents=[leaked_reasoning, "最终整理后的正文"],
+            ),
+            "最终整理后的正文",
         )
 
     def test_build_usage_summary_reports_cache_ratio(self):

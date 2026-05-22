@@ -75,6 +75,32 @@ export interface ChatWriteReviewRenderedPreview {
 	isPartial: boolean;
 }
 
+export interface ChatWriteReviewFileSummary {
+	path: string;
+	oldPath?: string;
+	newPath?: string;
+	kind: "created" | "deleted" | "modified";
+	additions: string[];
+	removals: string[];
+}
+
+export interface ChatWriteReviewDiffFile extends ChatWriteReviewFileSummary {
+	diff: string;
+}
+
+export interface ChatWriteReviewOverview {
+	fileCount: number;
+	additions: number;
+	removals: number;
+	visibleFiles: ChatWriteReviewFileSummary[];
+	hiddenFiles: ChatWriteReviewFileSummary[];
+}
+
+export interface ChatWriteReviewDiffSection {
+	type: "add" | "remove";
+	text: string;
+}
+
 export function buildChatWriteAppliedReview(input: ChatWriteAppliedReviewInput): ChatWriteAppliedReview | null {
 	const requestId = input.requestId?.trim();
 	const diff = input.diff?.trim() ?? "";
@@ -180,6 +206,33 @@ export function buildChatWriteReviewInlinePreview(
 		deletions,
 		additions
 	};
+}
+
+export function summarizeChatWriteReviewFiles(review: ChatWriteReviewRequestLike): ChatWriteReviewFileSummary[] {
+	return collectChatWriteReviewDiffFiles(review).map(({ diff: _diff, ...file }) => file);
+}
+
+export function splitChatWriteReviewDiffFiles(review: ChatWriteReviewRequestLike): ChatWriteReviewDiffFile[] {
+	return collectChatWriteReviewDiffFiles(review);
+}
+
+export function buildChatWriteReviewOverview(
+	review: ChatWriteReviewRequestLike,
+	visibleFileLimit = 3
+): ChatWriteReviewOverview {
+	const files = summarizeChatWriteReviewFiles(review);
+	const safeLimit = Math.max(1, visibleFileLimit);
+	return {
+		fileCount: files.length,
+		additions: files.reduce((total, file) => total + file.additions.length, 0),
+		removals: files.reduce((total, file) => total + file.removals.length, 0),
+		visibleFiles: files.slice(0, safeLimit),
+		hiddenFiles: files.slice(safeLimit)
+	};
+}
+
+export function extractChatWriteReviewDiffSections(diff: string): ChatWriteReviewDiffSection[] {
+	return extractAppliedInlineReviewSections(diff);
 }
 
 export function resolveChatWriteReviewTargetPath(
@@ -398,6 +451,156 @@ export function buildChatWriteReviewDocumentFrame(
 
 function normalizeReviewPath(path?: string): string {
 	return (path ?? "").trim().replace(/\\/g, "/");
+}
+
+function extractAppliedInlineReviewSections(diff: string): Array<{ type: "add" | "remove"; text: string }> {
+	const sections: Array<{ type: "add" | "remove"; text: string }> = [];
+	let currentType: "add" | "remove" | null = null;
+	let currentLines: string[] = [];
+	const flush = () => {
+		if (!currentType) {
+			return;
+		}
+		sections.push({ type: currentType, text: currentLines.join("\n") });
+		currentType = null;
+		currentLines = [];
+	};
+	const append = (type: "add" | "remove", text: string) => {
+		if (currentType !== type) {
+			flush();
+			currentType = type;
+		}
+		currentLines.push(text);
+	};
+
+	for (const line of diff.split("\n")) {
+		if (!line || line.startsWith("@@") || line.startsWith("diff --git") || line.startsWith("index ")) {
+			flush();
+			continue;
+		}
+		if (line.startsWith("+++") || line.startsWith("---")) {
+			flush();
+			continue;
+		}
+		if (line.startsWith("+")) {
+			append("add", line.slice(1));
+			continue;
+		}
+		if (line.startsWith("-")) {
+			append("remove", line.slice(1));
+			continue;
+		}
+		flush();
+	}
+	flush();
+	return sections.filter((section) => section.text.length > 0);
+}
+
+function collectChatWriteReviewDiffFiles(review: ChatWriteReviewRequestLike): ChatWriteReviewDiffFile[] {
+	const diff = review.diff?.trim() ?? "";
+	if (!diff) {
+		return [];
+	}
+
+	const files: ChatWriteReviewDiffFile[] = [];
+	let current: ChatWriteReviewDiffFile & { diffLines: string[] } | null = null;
+
+	const normalizeDiffPath = (path: string): string => {
+		const trimmed = normalizeReviewPath(path);
+		if (!trimmed || trimmed === "/dev/null") {
+			return "";
+		}
+		return trimmed.replace(/^[ab]\//, "");
+	};
+	const ensureCurrent = (): ChatWriteReviewDiffFile & { diffLines: string[] } => {
+		if (!current) {
+			current = {
+				path: normalizeReviewPath(review.filePath) || "未命名写入",
+				kind: "modified",
+				additions: [],
+				removals: [],
+				diff: "",
+				diffLines: []
+			};
+		}
+		return current;
+	};
+	const finish = () => {
+		if (!current) {
+			return;
+		}
+		const oldPath = current.oldPath ?? "";
+		const newPath = current.newPath ?? "";
+		current.path = newPath || oldPath || current.path;
+		current.kind = oldPath && !newPath ? "deleted" : !oldPath && newPath ? "created" : "modified";
+		current.diff = current.diffLines.join("\n").trim();
+		const output: ChatWriteReviewDiffFile = {
+			path: current.path,
+			kind: current.kind,
+			additions: [...current.additions],
+			removals: [...current.removals],
+			diff: current.diff
+		};
+		if (current.oldPath) {
+			output.oldPath = current.oldPath;
+		}
+		if (current.newPath) {
+			output.newPath = current.newPath;
+		}
+		files.push(output);
+		current = null;
+	};
+
+	for (const line of diff.split("\n")) {
+		if (line.startsWith("diff --git ")) {
+			finish();
+			current = {
+				path: normalizeReviewPath(review.filePath) || "未命名写入",
+				kind: "modified",
+				additions: [],
+				removals: [],
+				diff: line,
+				diffLines: [line]
+			};
+			continue;
+		}
+		const next = ensureCurrent();
+		next.diffLines.push(line);
+		if (line.startsWith("--- ")) {
+			next.oldPath = normalizeDiffPath(line.slice(4));
+			continue;
+		}
+		if (line.startsWith("+++ ")) {
+			next.newPath = normalizeDiffPath(line.slice(4));
+			continue;
+		}
+		if (!line || line.startsWith("@@") || line.startsWith("index ")) {
+			continue;
+		}
+		if (line.startsWith("+")) {
+			next.additions.push(line.slice(1));
+			continue;
+		}
+		if (line.startsWith("-")) {
+			next.removals.push(line.slice(1));
+		}
+	}
+	finish();
+
+	if (files.length > 0) {
+		return files;
+	}
+
+	const fallbackSections = extractAppliedInlineReviewSections(diff);
+	return [
+		{
+			path: normalizeReviewPath(review.filePath) || "未命名写入",
+			kind: "modified",
+			additions: fallbackSections.filter((section) => section.type === "add").flatMap((section) => section.text.split("\n")),
+			removals: fallbackSections.filter((section) => section.type === "remove").flatMap((section) => section.text.split("\n")),
+			diff
+		}
+	];
 }
 
 function parseDiffTargetPaths(diff?: string): string[] {

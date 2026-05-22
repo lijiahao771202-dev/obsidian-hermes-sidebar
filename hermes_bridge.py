@@ -509,10 +509,50 @@ def should_display_reasoning_delta(text: Any) -> bool:
     return True
 
 
-def append_reasoning_delta_preview(buffer: list[str], text: Any, *, max_length: int = 2000) -> str:
+def looks_like_internal_reasoning_text(text: Any) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    normalized = value.lower()
+    markers = (
+        "必须用 file 工具",
+        "没有 file toolset",
+        "让我看看子代理",
+        "我可以给子代理",
+        "让我先直接处理",
+        "让我重新扫描",
+        "chain-of-thought",
+        "hidden reasoning",
+    )
+    if any(marker.lower() in normalized for marker in markers):
+        return True
+
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    first_person_planning = sum(
+        1
+        for line in lines
+        if any(token in line for token in ("我先", "我再", "我会", "让我", "接下来", "然后", "同时"))
+    )
+    tool_references = sum(
+        1
+        for line in lines
+        if any(token in line.lower() for token in ("tool", "工具", "toolset", "read_file", "write_file", "execute_code", "terminal", "file"))
+    )
+    return len(lines) >= 3 and first_person_planning >= 2 and tool_references >= 1
+
+
+def append_reasoning_delta_preview(
+    buffer: list[str],
+    text: Any,
+    *,
+    max_length: int = 2000,
+    replace: bool = False,
+) -> str:
     chunk = str(text or "")
     if not chunk:
         return ""
+    if replace:
+        buffer.clear()
     buffer.append(chunk)
     return compact_preview("".join(buffer), max_length=max_length)
 
@@ -524,27 +564,42 @@ def append_reasoning_activity_preview(
     *,
     max_length: int = 2000,
 ) -> tuple[str, str]:
-    delta, next_reasoning_text = extract_new_reasoning_delta(previous_text, text)
+    delta, next_reasoning_text, should_replace = extract_new_reasoning_delta(previous_text, text)
     if not should_display_reasoning_delta(delta):
         return "", next_reasoning_text
-    return append_reasoning_delta_preview(buffer, delta, max_length=max_length), next_reasoning_text
+    return append_reasoning_delta_preview(buffer, delta, max_length=max_length, replace=should_replace), next_reasoning_text
 
 
-def extract_new_reasoning_delta(previous_text: str, text: Any) -> tuple[str, str]:
+def extract_new_reasoning_delta(previous_text: str, text: Any) -> tuple[str, str, bool]:
     """Return only newly exposed reasoning text, tolerating cumulative snapshots."""
     chunk = str(text or "")
     if not chunk:
-        return "", previous_text
+        return "", previous_text, False
     if previous_text:
         if chunk == previous_text or chunk in previous_text or previous_text.endswith(chunk):
-            return "", previous_text
+            return "", previous_text, False
         if chunk.startswith(previous_text):
-            return chunk[len(previous_text):], chunk
+            return chunk[len(previous_text):], chunk, False
         max_overlap = min(len(previous_text), len(chunk))
         for size in range(max_overlap, 0, -1):
             if previous_text.endswith(chunk[:size]):
-                return chunk[size:], f"{previous_text}{chunk[size:]}"
-    return chunk, f"{previous_text}{chunk}"
+                return chunk[size:], f"{previous_text}{chunk[size:]}", False
+        if looks_like_rewritten_reasoning_snapshot(previous_text, chunk):
+            return chunk, chunk, True
+    return chunk, f"{previous_text}{chunk}", False
+
+
+def looks_like_rewritten_reasoning_snapshot(previous_text: str, text: str) -> bool:
+    value = str(text or "").strip()
+    previous = str(previous_text or "").strip()
+    if not previous or not value:
+        return False
+    if value.startswith(previous) or previous in value or value in previous or previous.endswith(value):
+        return False
+    rewrite_markers = ("重新", "修正", "改为", "更准确", "换个", "重来", "revis", "rewrite", "restart")
+    if any(marker in value.lower() for marker in rewrite_markers):
+        return True
+    return len(previous) >= 24 and len(value) >= 24 and difflib.SequenceMatcher(None, previous, value).ratio() >= 0.45
 
 
 def is_xiaomi_runtime(provider: str | None, base_url: str | None) -> bool:
@@ -669,6 +724,15 @@ def pick_bridge_final_text(
 ) -> str:
     candidates: list[str] = []
     seen: set[str] = set()
+    reasoning_preview_texts = [
+        str(item or "").strip()
+        for item in (reasoning_previews or [])
+        if str(item or "").strip()
+    ]
+
+    def is_reasoning_preview_text(text: str) -> bool:
+        return any(preview == text or preview in text or text in preview for preview in reasoning_preview_texts)
+
     for group in (
         [final_text or "", streamed_text or ""],
         progress_texts or [],
@@ -676,7 +740,7 @@ def pick_bridge_final_text(
     ):
         for item in group:
             text = str(item or "").strip()
-            if not text or text in seen:
+            if not text or text in seen or looks_like_internal_reasoning_text(text) or is_reasoning_preview_text(text):
                 continue
             seen.add(text)
             candidates.append(text)

@@ -11,6 +11,7 @@ import {
 	formatUsageInputTokens,
 	getContextModeDescription,
 	getAppendIndexAfterTurnMessages,
+	getAppendIndexAfterLatestTurnAssistant,
 	pickLiveContextForMode,
 	shouldRefreshSelectionSnapshot,
 	formatSelectionPreview,
@@ -19,6 +20,7 @@ import {
 	canUpdateBridgeEventWithoutFullRender,
 	formatActivityTimelineSummary,
 	getActivityChainTailVisibleCount,
+	collapseCompletedTurnActivityMessages,
 	getVisibleActivityMessages,
 	isComposerSendShortcut,
 	shouldMergeActivityEntry,
@@ -494,6 +496,28 @@ test("getVisibleActivityMessages fully hides short completed activity chains whe
 	assert.equal(formatActivityTimelineSummary(result.totalCount, result.hiddenCount), "过程 · 2 条");
 });
 
+test("collapseCompletedTurnActivityMessages merges a finished turn into one survivor activity message", () => {
+	const messages = [
+		{ id: "user-1", kind: "user", role: "user" },
+		{ id: "activity-1", kind: "activity", role: "assistant", pending: false, activities: [{ toolName: "read_file", status: "done", preview: "A" }] },
+		{ id: "assistant-1", kind: "final", role: "assistant" },
+		{ id: "activity-2", kind: "activity", role: "assistant", pending: false, activities: [{ toolName: "write_file", status: "done", preview: "B" }] },
+		{ id: "user-2", kind: "user", role: "user" }
+	];
+
+	const result = collapseCompletedTurnActivityMessages(messages, "user-1", "activity-2");
+
+	assert.deepEqual(
+		result.messages.map((message) => message.id),
+		["user-1", "assistant-1", "activity-2", "user-2"]
+	);
+	assert.equal(result.survivorMessageId, "activity-2");
+	assert.deepEqual(
+		result.messages.find((message) => message.id === "activity-2")?.activities?.map((entry) => entry?.preview),
+		["A", "B"]
+	);
+});
+
 test("shouldMergeActivityEntry keeps streaming thinking in a single visible row", () => {
 	assert.equal(shouldMergeActivityEntry("thinking", "running", "running", "让", "让我"), true);
 	assert.equal(shouldMergeActivityEntry("thinking", "done", "running", "让", "让我"), false);
@@ -524,6 +548,18 @@ test("turn events append after prior events so assistant replies can interleave 
 	const withNextTurn = [...messages, { id: "user-2", kind: "user" }];
 	assert.equal(getAppendIndexAfterTurnMessages(withNextTurn, "user-1"), 3);
 	assert.equal(getAppendIndexAfterTurnMessages(withNextTurn, "missing"), 4);
+});
+
+test("getAppendIndexAfterLatestTurnAssistant keeps review blocks below the latest assistant reply", () => {
+	const messages = [
+		{ id: "user-1", kind: "user" },
+		{ id: "activity-1", kind: "activity" },
+		{ id: "assistant-1", kind: "final" },
+		{ id: "user-2", kind: "user" }
+	];
+
+	assert.equal(getAppendIndexAfterLatestTurnAssistant(messages, "user-1"), 3);
+	assert.equal(getAppendIndexAfterLatestTurnAssistant(messages, "missing"), undefined);
 });
 
 test("shouldRestoreComposerFocus only keeps focus when the user is already near the bottom", () => {
