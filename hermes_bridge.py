@@ -517,6 +517,19 @@ def append_reasoning_delta_preview(buffer: list[str], text: Any, *, max_length: 
     return compact_preview("".join(buffer), max_length=max_length)
 
 
+def append_reasoning_activity_preview(
+    buffer: list[str],
+    previous_text: str,
+    text: Any,
+    *,
+    max_length: int = 2000,
+) -> tuple[str, str]:
+    delta, next_reasoning_text = extract_new_reasoning_delta(previous_text, text)
+    if not should_display_reasoning_delta(delta):
+        return "", next_reasoning_text
+    return append_reasoning_delta_preview(buffer, delta, max_length=max_length), next_reasoning_text
+
+
 def extract_new_reasoning_delta(previous_text: str, text: Any) -> tuple[str, str]:
     """Return only newly exposed reasoning text, tolerating cumulative snapshots."""
     chunk = str(text or "")
@@ -527,6 +540,10 @@ def extract_new_reasoning_delta(previous_text: str, text: Any) -> tuple[str, str
             return "", previous_text
         if chunk.startswith(previous_text):
             return chunk[len(previous_text):], chunk
+        max_overlap = min(len(previous_text), len(chunk))
+        for size in range(max_overlap, 0, -1):
+            if previous_text.endswith(chunk[:size]):
+                return chunk[size:], f"{previous_text}{chunk[size:]}"
     return chunk, f"{previous_text}{chunk}"
 
 
@@ -889,19 +906,24 @@ def main() -> int:
     ) -> None:
         nonlocal last_reasoning_delta_text, last_emitted_reasoning_preview
         is_reasoning_event = event_type in {"_thinking", "reasoning.available"}
+        raw_preview_text = str(preview or args or "")
         if is_reasoning_event:
-            preview_text = compact_preview(preview or args, max_length=2000)
+            preview_text = compact_preview(raw_preview_text, max_length=2000)
         else:
             preview_text = summarize_tool_args(str(tool_name or ""), args, preview)
 
         if event_type == "reasoning.available" and preview_text:
             reasoning_previews.append(preview_text)
         if should_emit_reasoning_activity(event_type, preview_text):
-            delta, next_reasoning_text = extract_new_reasoning_delta(last_reasoning_delta_text, preview_text)
+            preview_text, next_reasoning_text = append_reasoning_activity_preview(
+                reasoning_delta_parts,
+                last_reasoning_delta_text,
+                raw_preview_text,
+                max_length=2000,
+            )
             last_reasoning_delta_text = next_reasoning_text
-            if not should_display_reasoning_delta(delta):
+            if not preview_text:
                 return
-            preview_text = append_reasoning_delta_preview(reasoning_delta_parts, delta, max_length=2000)
             if preview_text == last_emitted_reasoning_preview:
                 return
             last_emitted_reasoning_preview = preview_text
@@ -941,11 +963,13 @@ def main() -> int:
 
     def on_reasoning_delta(text: str) -> None:
         nonlocal last_reasoning_delta_text, last_emitted_reasoning_preview
-        delta, next_reasoning_text = extract_new_reasoning_delta(last_reasoning_delta_text, text)
+        preview_text, next_reasoning_text = append_reasoning_activity_preview(
+            reasoning_delta_parts,
+            last_reasoning_delta_text,
+            text,
+            max_length=2000,
+        )
         last_reasoning_delta_text = next_reasoning_text
-        if not should_display_reasoning_delta(delta):
-            return
-        preview_text = append_reasoning_delta_preview(reasoning_delta_parts, delta, max_length=2000)
         if not preview_text:
             return
         if preview_text == last_emitted_reasoning_preview:

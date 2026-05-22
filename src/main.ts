@@ -1013,6 +1013,8 @@ class HermesSidebarView extends ItemView {
 	private pendingAppliedInlineWriteFollowFrame: number | null = null;
 	private pendingWriteReviewReveal: PendingWriteReviewReveal | null = null;
 	private pendingWikiAutoCreateReview: PendingWikiAutoCreateReview | null = null;
+	private pendingThinkingScrollFrame: number | null = null;
+	private pendingThinkingScrollTimeouts: number[] = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: HermesSidebarPlugin) {
 		super(leaf);
@@ -1049,6 +1051,11 @@ class HermesSidebarView extends ItemView {
 			window.cancelAnimationFrame(this.pendingScrollRestoreFrame);
 			this.pendingScrollRestoreFrame = null;
 		}
+		if (this.pendingThinkingScrollFrame !== null) {
+			window.cancelAnimationFrame(this.pendingThinkingScrollFrame);
+			this.pendingThinkingScrollFrame = null;
+		}
+		this.clearPendingThinkingScrollTimeouts();
 		this.cancelPendingStreamingRender();
 		this.clearAppliedInlineWriteReview();
 		this.pendingWriteReviewReveal = null;
@@ -1837,14 +1844,16 @@ class HermesSidebarView extends ItemView {
 					const thinkingPreview = content.createEl("details", {
 						cls: "hermes-sidebar-run-step-preview hermes-sidebar-thinking-preview"
 					});
+					thinkingPreview.open = true;
 					thinkingPreview.createEl("summary", {
 						cls: "hermes-sidebar-thinking-preview-summary",
-						text: "查看思考内容"
+						text: entry.status === "running" ? "思考流" : "完整思考"
 					});
 					thinkingPreview.createDiv({
 						cls: "hermes-sidebar-thinking-preview-body",
 						text: entry.preview
 					});
+					this.scheduleThinkingPreviewScroll();
 				} else if (entry.toolName === "write_trace") {
 					const tracePreview = content.createDiv({
 						cls: "hermes-sidebar-run-step-preview hermes-sidebar-write-trace-preview"
@@ -3606,6 +3615,36 @@ class HermesSidebarView extends ItemView {
 			this.scrollMessagesToBottom();
 			window.requestAnimationFrame(() => this.scrollMessagesToBottom());
 		});
+	}
+
+	private scheduleThinkingPreviewScroll(): void {
+		if (this.pendingThinkingScrollFrame !== null) {
+			window.cancelAnimationFrame(this.pendingThinkingScrollFrame);
+		}
+		this.clearPendingThinkingScrollTimeouts();
+
+		this.pendingThinkingScrollFrame = window.requestAnimationFrame(() => {
+			this.pendingThinkingScrollFrame = null;
+			this.scrollThinkingPreviewsToBottom();
+			window.requestAnimationFrame(() => this.scrollThinkingPreviewsToBottom());
+		});
+		this.pendingThinkingScrollTimeouts = [80, 220].map((delay) =>
+			window.setTimeout(() => this.scrollThinkingPreviewsToBottom(), delay)
+		);
+	}
+
+	private scrollThinkingPreviewsToBottom(): void {
+		const previews = this.containerEl.querySelectorAll<HTMLElement>(".hermes-sidebar-thinking-preview-body");
+		Array.from(previews).forEach((preview) => {
+			preview.scrollTop = preview.scrollHeight;
+		});
+	}
+
+	private clearPendingThinkingScrollTimeouts(): void {
+		for (const timeoutId of this.pendingThinkingScrollTimeouts) {
+			window.clearTimeout(timeoutId);
+		}
+		this.pendingThinkingScrollTimeouts = [];
 	}
 
 	private captureScrollIntent(): void {

@@ -16,6 +16,7 @@ from hermes_bridge import (
     extract_new_reasoning_delta,
     format_tool_status,
     install_write_review_handlers,
+    append_reasoning_activity_preview,
     should_display_reasoning_delta,
     pick_bridge_final_text,
     preprocess_bridge_images,
@@ -55,6 +56,23 @@ class HermesBridgeHelpersTest(unittest.TestCase):
         delta, previous = extract_new_reasoning_delta(previous, "让我先搜索一下")
         self.assertEqual(delta, "")
         self.assertEqual(previous, "让我先搜索一下")
+
+    def test_reasoning_activity_preview_appends_only_new_delta(self):
+        buffer = []
+        preview, previous = append_reasoning_activity_preview(buffer, "", "让我先搜索一下")
+        self.assertEqual(preview, "让我先搜索一下")
+        self.assertEqual(previous, "让我先搜索一下")
+
+        preview, previous = append_reasoning_activity_preview(buffer, previous, "让我先搜索一下网关实现")
+        self.assertEqual(preview, "让我先搜索一下网关实现")
+        self.assertEqual(previous, "让我先搜索一下网关实现")
+        self.assertEqual("".join(buffer), "让我先搜索一下网关实现")
+        self.assertEqual(preview.count("让我先搜索一下"), 1)
+
+    def test_reasoning_delta_deduplicates_overlapping_snapshots(self):
+        delta, previous = extract_new_reasoning_delta("让我先搜索一下", "搜索一下网关实现")
+        self.assertEqual(delta, "网关实现")
+        self.assertEqual(previous, "让我先搜索一下网关实现")
 
     def test_reasoning_delta_filters_tool_step_fragments(self):
         self.assertFalse(should_display_reasoning_delta("正在调用 search_files"))

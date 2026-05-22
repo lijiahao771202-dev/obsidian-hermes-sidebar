@@ -3214,6 +3214,8 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.pendingAppliedInlineWriteFollowFrame = null;
     this.pendingWriteReviewReveal = null;
     this.pendingWikiAutoCreateReview = null;
+    this.pendingThinkingScrollFrame = null;
+    this.pendingThinkingScrollTimeouts = [];
     this.plugin = plugin;
   }
   getViewType() {
@@ -3242,6 +3244,11 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       window.cancelAnimationFrame(this.pendingScrollRestoreFrame);
       this.pendingScrollRestoreFrame = null;
     }
+    if (this.pendingThinkingScrollFrame !== null) {
+      window.cancelAnimationFrame(this.pendingThinkingScrollFrame);
+      this.pendingThinkingScrollFrame = null;
+    }
+    this.clearPendingThinkingScrollTimeouts();
     this.cancelPendingStreamingRender();
     this.clearAppliedInlineWriteReview();
     this.pendingWriteReviewReveal = null;
@@ -3955,14 +3962,16 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
           const thinkingPreview = content.createEl("details", {
             cls: "hermes-sidebar-run-step-preview hermes-sidebar-thinking-preview"
           });
+          thinkingPreview.open = true;
           thinkingPreview.createEl("summary", {
             cls: "hermes-sidebar-thinking-preview-summary",
-            text: "\u67E5\u770B\u601D\u8003\u5185\u5BB9"
+            text: entry.status === "running" ? "\u601D\u8003\u6D41" : "\u5B8C\u6574\u601D\u8003"
           });
           thinkingPreview.createDiv({
             cls: "hermes-sidebar-thinking-preview-body",
             text: entry.preview
           });
+          this.scheduleThinkingPreviewScroll();
         } else if (entry.toolName === "write_trace") {
           const tracePreview = content.createDiv({
             cls: "hermes-sidebar-run-step-preview hermes-sidebar-write-trace-preview"
@@ -5521,6 +5530,32 @@ ${message}`
       this.scrollMessagesToBottom();
       window.requestAnimationFrame(() => this.scrollMessagesToBottom());
     });
+  }
+  scheduleThinkingPreviewScroll() {
+    if (this.pendingThinkingScrollFrame !== null) {
+      window.cancelAnimationFrame(this.pendingThinkingScrollFrame);
+    }
+    this.clearPendingThinkingScrollTimeouts();
+    this.pendingThinkingScrollFrame = window.requestAnimationFrame(() => {
+      this.pendingThinkingScrollFrame = null;
+      this.scrollThinkingPreviewsToBottom();
+      window.requestAnimationFrame(() => this.scrollThinkingPreviewsToBottom());
+    });
+    this.pendingThinkingScrollTimeouts = [80, 220].map(
+      (delay) => window.setTimeout(() => this.scrollThinkingPreviewsToBottom(), delay)
+    );
+  }
+  scrollThinkingPreviewsToBottom() {
+    const previews = this.containerEl.querySelectorAll(".hermes-sidebar-thinking-preview-body");
+    Array.from(previews).forEach((preview) => {
+      preview.scrollTop = preview.scrollHeight;
+    });
+  }
+  clearPendingThinkingScrollTimeouts() {
+    for (const timeoutId of this.pendingThinkingScrollTimeouts) {
+      window.clearTimeout(timeoutId);
+    }
+    this.pendingThinkingScrollTimeouts = [];
   }
   captureScrollIntent() {
     if (!this.messagesEl) {
