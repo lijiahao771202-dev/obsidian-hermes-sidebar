@@ -1,0 +1,413 @@
+Mplus VERSION 8.3 (Mac)
+MUTHEN & MUTHEN
+05/19/2026   6:54 PM
+
+INPUT INSTRUCTIONS
+
+  TITLE: Baer et al. (2006) Table 4 facet-correlation power, N=1400;
+
+  MONTECARLO:
+    NAMES = observe describe actaware nonjudge nonreact;
+    NOBSERVATIONS = 1400;
+    NREPS = 5000;
+    SEED = 20261919;
+
+  MODEL POPULATION:
+    [observe*0 describe*0 actaware*0 nonjudge*0 nonreact*0];
+    observe*1 describe*1 actaware*1 nonjudge*1 nonreact*1;
+    observe WITH describe*.26 actaware*.15 nonjudge*-.07 nonreact*.16;
+    describe WITH actaware*.30 nonjudge*.21 nonreact*.22;
+    actaware WITH nonjudge*.34 nonreact*.33;
+    nonjudge WITH nonreact*.34;
+
+  MODEL:
+    [observe*0 describe*0 actaware*0 nonjudge*0 nonreact*0];
+    observe*1 describe*1 actaware*1 nonjudge*1 nonreact*1;
+    observe WITH describe*.26 actaware*.15 nonjudge*-.07 nonreact*.16;
+    describe WITH actaware*.30 nonjudge*.21 nonreact*.22;
+    actaware WITH nonjudge*.34 nonreact*.33;
+    nonjudge WITH nonreact*.34;
+
+  OUTPUT:
+    TECH9;
+
+
+
+INPUT READING TERMINATED NORMALLY
+
+
+
+Baer et al. (2006) Table 4 facet-correlation power, N=1400;
+
+SUMMARY OF ANALYSIS
+
+Number of groups                                                 1
+Number of observations                                        1400
+
+Number of replications
+    Requested                                                 5000
+    Completed                                                 5000
+Value of seed                                             20261919
+
+Number of dependent variables                                    5
+Number of independent variables                                  0
+Number of continuous latent variables                            0
+
+Observed dependent variables
+
+  Continuous
+   OBSERVE     DESCRIBE    ACTAWARE    NONJUDGE    NONREACT
+
+
+Estimator                                                       ML
+Information matrix                                        OBSERVED
+Maximum number of iterations                                  1000
+Convergence criterion                                    0.500D-04
+Maximum number of steepest descent iterations                   20
+
+
+
+SAMPLE STATISTICS FOR THE FIRST REPLICATION
+
+
+     SAMPLE STATISTICS
+
+
+           Means
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+               -0.032        -0.024         0.041         0.018         0.017
+
+
+           Covariances
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+ OBSERVE        0.959
+ DESCRIBE       0.248         1.025
+ ACTAWARE       0.125         0.276         0.959
+ NONJUDGE      -0.070         0.211         0.304         0.966
+ NONREACT       0.168         0.241         0.324         0.326         0.993
+
+
+           Correlations
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+ OBSERVE        1.000
+ DESCRIBE       0.250         1.000
+ ACTAWARE       0.130         0.278         1.000
+ NONJUDGE      -0.072         0.212         0.316         1.000
+ NONREACT       0.172         0.239         0.331         0.333         1.000
+
+
+MODEL FIT INFORMATION
+
+Number of Free Parameters                       20
+
+Loglikelihood
+
+    H0 Value
+
+        Mean                             -9538.578
+        Std Dev                             59.227
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       0.989        -9676.358      -9680.250
+           0.980       0.980        -9660.213      -9660.053
+           0.950       0.948        -9636.001      -9636.913
+           0.900       0.900        -9614.484      -9614.637
+           0.800       0.804        -9588.424      -9587.419
+           0.700       0.694        -9569.637      -9570.528
+           0.500       0.500        -9538.578      -9538.489
+           0.300       0.306        -9507.520      -9506.621
+           0.200       0.207        -9488.733      -9487.121
+           0.100       0.096        -9462.673      -9464.058
+           0.050       0.047        -9441.156      -9442.575
+           0.020       0.019        -9416.944      -9418.494
+           0.010       0.009        -9400.799      -9404.728
+
+    H1 Value
+
+        Mean                             -9538.578
+        Std Dev                             59.227
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       0.989        -9676.358      -9680.250
+           0.980       0.980        -9660.213      -9660.053
+           0.950       0.948        -9636.001      -9636.913
+           0.900       0.900        -9614.484      -9614.637
+           0.800       0.804        -9588.424      -9587.419
+           0.700       0.694        -9569.637      -9570.528
+           0.500       0.500        -9538.578      -9538.489
+           0.300       0.306        -9507.520      -9506.621
+           0.200       0.207        -9488.733      -9487.121
+           0.100       0.096        -9462.673      -9464.058
+           0.050       0.047        -9441.156      -9442.575
+           0.020       0.019        -9416.944      -9418.494
+           0.010       0.009        -9400.799      -9404.728
+
+Information Criteria
+
+    Akaike (AIC)
+
+        Mean                             19117.157
+        Std Dev                            118.454
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       0.991        18841.597      18849.293
+           0.980       0.981        18873.888      18876.712
+           0.950       0.953        18922.312      18924.965
+           0.900       0.904        18965.346      18968.017
+           0.800       0.793        19017.466      19014.004
+           0.700       0.694        19055.040      19053.190
+           0.500       0.500        19117.157      19116.854
+           0.300       0.306        19179.274      19181.053
+           0.200       0.196        19216.848      19214.460
+           0.100       0.100        19268.968      19269.217
+           0.050       0.052        19312.002      19313.680
+           0.020       0.020        19360.426      19359.816
+           0.010       0.011        19392.717      19398.301
+
+    Bayesian (BIC)
+
+        Mean                             19222.042
+        Std Dev                            118.454
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       0.991        18946.482      18954.177
+           0.980       0.981        18978.773      18981.596
+           0.950       0.953        19027.197      19029.850
+           0.900       0.904        19070.231      19072.901
+           0.800       0.793        19122.351      19118.889
+           0.700       0.694        19159.924      19158.075
+           0.500       0.500        19222.042      19221.739
+           0.300       0.306        19284.159      19285.937
+           0.200       0.196        19321.732      19319.344
+           0.100       0.100        19373.852      19374.101
+           0.050       0.052        19416.887      19418.564
+           0.020       0.020        19465.311      19464.700
+           0.010       0.011        19497.601      19503.185
+
+    Sample-Size Adjusted BIC (n* = (n + 2) / 24)
+
+        Mean                             19158.509
+        Std Dev                            118.454
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       0.991        18882.949      18890.645
+           0.980       0.981        18915.240      18918.064
+           0.950       0.953        18963.664      18966.317
+           0.900       0.904        19006.698      19009.369
+           0.800       0.793        19058.818      19055.356
+           0.700       0.694        19096.392      19094.542
+           0.500       0.500        19158.509      19158.206
+           0.300       0.306        19220.626      19222.405
+           0.200       0.196        19258.200      19255.812
+           0.100       0.100        19310.320      19310.569
+           0.050       0.052        19353.354      19355.032
+           0.020       0.020        19401.778      19401.168
+           0.010       0.011        19434.069      19439.653
+
+Chi-Square Test of Model Fit
+
+        Degrees of freedom                       0
+
+        Mean                                 0.000
+        Std Dev                              0.000
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       1.000            0.000          0.000
+           0.980       1.000            0.000          0.000
+           0.950       1.000            0.000          0.000
+           0.900       1.000            0.000          0.000
+           0.800       1.000            0.000          0.000
+           0.700       1.000            0.000          0.000
+           0.500       1.000            0.000          0.000
+           0.300       1.000            0.000          0.000
+           0.200       1.000            0.000          0.000
+           0.100       1.000            0.000          0.000
+           0.050       1.000            0.000          0.000
+           0.020       1.000            0.000          0.000
+           0.010       1.000            0.000          0.000
+
+RMSEA (Root Mean Square Error Of Approximation)
+
+        Mean                                 0.000
+        Std Dev                              0.000
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       0.000            0.000          0.000
+           0.980       0.000            0.000          0.000
+           0.950       0.000            0.000          0.000
+           0.900       0.000            0.000          0.000
+           0.800       0.000            0.000          0.000
+           0.700       0.000            0.000          0.000
+           0.500       0.000            0.000          0.000
+           0.300       0.000            0.000          0.000
+           0.200       0.000            0.000          0.000
+           0.100       0.000            0.000          0.000
+           0.050       0.000            0.000          0.000
+           0.020       0.000            0.000          0.000
+           0.010       0.000            0.000          0.000
+
+SRMR (Standardized Root Mean Square Residual)
+
+        Mean                                 0.000
+        Std Dev                              0.000
+        Number of successful computations     5000
+
+             Proportions                   Percentiles
+        Expected    Observed         Expected       Observed
+           0.990       0.975            0.000          0.000
+           0.980       0.965            0.000          0.000
+           0.950       0.944            0.000          0.000
+           0.900       0.917            0.000          0.000
+           0.800       0.863            0.000          0.000
+           0.700       0.777            0.000          0.000
+           0.500       0.535            0.000          0.000
+           0.300       0.277            0.000          0.000
+           0.200       0.165            0.000          0.000
+           0.100       0.073            0.000          0.000
+           0.050       0.030            0.000          0.000
+           0.020       0.009            0.000          0.000
+           0.010       0.003            0.000          0.000
+
+
+MODEL RESULTS
+
+                              ESTIMATES              S. E.     M. S. E.  95%  % Sig
+                 Population   Average   Std. Dev.   Average             Cover Coeff
+ OBSERVE  WITH
+  DESCRIBE            0.260     0.2599     0.0275     0.0276     0.0008 0.951 1.000
+  ACTAWARE            0.150     0.1499     0.0270     0.0270     0.0007 0.946 1.000
+  NONJUDGE           -0.070    -0.0707     0.0267     0.0268     0.0007 0.952 0.751
+  NONREACT            0.160     0.1589     0.0271     0.0270     0.0007 0.952 1.000
+
+ DESCRIBE WITH
+  ACTAWARE            0.300     0.3000     0.0277     0.0279     0.0008 0.953 1.000
+  NONJUDGE            0.210     0.2096     0.0271     0.0273     0.0007 0.953 1.000
+  NONREACT            0.220     0.2203     0.0274     0.0273     0.0008 0.948 1.000
+
+ ACTAWARE WITH
+  NONJUDGE            0.340     0.3395     0.0280     0.0282     0.0008 0.948 1.000
+  NONREACT            0.330     0.3298     0.0282     0.0281     0.0008 0.950 1.000
+
+ NONJUDGE WITH
+  NONREACT            0.340     0.3390     0.0277     0.0282     0.0008 0.953 1.000
+
+ Means
+  OBSERVE             0.000     0.0006     0.0266     0.0267     0.0007 0.949 0.051
+  DESCRIBE            0.000     0.0004     0.0265     0.0267     0.0007 0.948 0.052
+  ACTAWARE            0.000     0.0002     0.0268     0.0267     0.0007 0.951 0.049
+  NONJUDGE            0.000     0.0002     0.0262     0.0267     0.0007 0.958 0.042
+  NONREACT            0.000     0.0000     0.0266     0.0267     0.0007 0.954 0.046
+
+ Variances
+  OBSERVE             1.000     0.9997     0.0376     0.0378     0.0014 0.953 1.000
+  DESCRIBE            1.000     0.9994     0.0376     0.0378     0.0014 0.952 1.000
+  ACTAWARE            1.000     0.9992     0.0370     0.0378     0.0014 0.953 1.000
+  NONJUDGE            1.000     0.9990     0.0376     0.0378     0.0014 0.952 1.000
+  NONREACT            1.000     0.9989     0.0382     0.0378     0.0015 0.946 1.000
+
+
+QUALITY OF NUMERICAL RESULTS
+
+     Average Condition Number for the Information Matrix      0.839E-01
+       (ratio of smallest to largest eigenvalue)
+
+
+TECHNICAL OUTPUT
+
+
+     PARAMETER SPECIFICATION
+
+
+           NU
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+                  1             2             3             4             5
+
+
+           THETA
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+ OBSERVE            6
+ DESCRIBE           7             8
+ ACTAWARE           9            10            11
+ NONJUDGE          12            13            14            15
+ NONREACT          16            17            18            19            20
+
+
+     STARTING VALUES
+
+
+           NU
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+                0.000         0.000         0.000         0.000         0.000
+
+
+           THETA
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+ OBSERVE        1.000
+ DESCRIBE       0.260         1.000
+ ACTAWARE       0.150         0.300         1.000
+ NONJUDGE      -0.070         0.210         0.340         1.000
+ NONREACT       0.160         0.220         0.330         0.340         1.000
+
+
+     POPULATION VALUES
+
+
+           NU
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+                0.000         0.000         0.000         0.000         0.000
+
+
+           THETA
+              OBSERVE       DESCRIBE      ACTAWARE      NONJUDGE      NONREACT
+              ________      ________      ________      ________      ________
+ OBSERVE        1.000
+ DESCRIBE       0.260         1.000
+ ACTAWARE       0.150         0.300         1.000
+ NONJUDGE      -0.070         0.210         0.340         1.000
+ NONREACT       0.160         0.220         0.330         0.340         1.000
+
+
+TECHNICAL 9 OUTPUT
+
+  Error messages for each replication (if any)
+
+
+
+     Beginning Time:  18:54:39
+        Ending Time:  18:54:48
+       Elapsed Time:  00:00:09
+
+
+
+MUTHEN & MUTHEN
+3463 Stoner Ave.
+Los Angeles, CA  90066
+
+Tel: (310) 391-9971
+Fax: (310) 391-8971
+Web: www.StatModel.com
+Support: Support@StatModel.com
+
+Copyright (c) 1998-2019 Muthen & Muthen

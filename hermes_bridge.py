@@ -332,9 +332,54 @@ def build_write_review_request(tool_name: str, args: dict[str, Any], *, task_id:
     return None
 
 
+def snapshot_write_review_files(review: dict[str, Any] | None) -> list[dict[str, str | None]]:
+    if not review or review.get("error"):
+        return []
+    snapshots: list[dict[str, str | None]] = []
+    seen: set[str] = set()
+    candidates = [str(review.get("filePath") or "")]
+    for line in str(review.get("diff") or "").splitlines():
+        if not line.startswith(("--- ", "+++ ")):
+            continue
+        label = line[4:].strip()
+        if label == "/dev/null":
+            continue
+        if label.startswith(("a/", "b/")):
+            label = label[2:]
+        candidates.append(label)
+    for candidate in candidates:
+        for raw_path in str(candidate or "").split(","):
+            raw_path = raw_path.strip()
+            if not raw_path or raw_path == "multiple files" or " -> " in raw_path:
+                continue
+            try:
+                resolved_path = resolve_preview_target_path(raw_path)
+            except Exception:
+                continue
+            key = str(resolved_path)
+            if key in seen:
+                continue
+            seen.add(key)
+            if resolved_path.exists():
+                try:
+                    content: str | None = resolved_path.read_text(encoding="utf-8")
+                except Exception:
+                    content = None
+            else:
+                content = None
+            snapshots.append({"path": key, "content": content})
+    return snapshots
+
+
+def result_has_error(result: str) -> bool:
+    try:
+        parsed = json.loads(result)
+    except Exception:
+        return False
+    return bool(isinstance(parsed, dict) and parsed.get("error"))
+
+
 def install_write_review_handlers(control_channel: BridgeControlChannel | None) -> None:
-    if control_channel is None:
-        return
     ensure_hermes_agent_root_on_path()
     from tools.registry import registry
 
@@ -348,72 +393,25 @@ def install_write_review_handlers(control_channel: BridgeControlChannel | None) 
 
         def _wrapped(args: dict[str, Any], __original: Callable[..., str] = original_handler, __tool_name: str = tool_name, **kwargs: Any) -> str:
             review = build_write_review_request(__tool_name, args, task_id=str(kwargs.get("task_id") or "default"))
-            if review is None:
-                return __original(args, **kwargs)
-            if review.get("error"):
+            if review is not None and review.get("error"):
                 return json.dumps({"error": review["error"]}, ensure_ascii=False)
-            request_id = f"write-review-{next(_WRITE_REVIEW_REQUEST_IDS)}"
-            for trace_event in build_write_trace_events(review):
-                emit(trace_event)
-            emit(
-                {
-                    "type": "write_review",
-                    "requestId": request_id,
-                    "toolName": review.get("toolName"),
-                    "filePath": review.get("filePath"),
-                    "title": review.get("title"),
-                    "meta": review.get("meta"),
-                    "diff": review.get("diff"),
-                }
-            )
-            review_response = control_channel.wait_for_write_review(request_id)
-            approved = bool(review_response.get("approved"))
-            applied_by_client = bool(review_response.get("applied_by_client"))
-            if not approved:
-                emit(
-                    {
-                        "type": "write_trace",
-                        "eventType": "write.review.cancel",
-                        "toolName": "write_trace",
-                        "status": "error",
-                        "text": "已取消这次写入",
-                        "preview": str(review.get("filePath") or ""),
-                    }
-                )
-                return json.dumps({"error": "User canceled the file write after reviewing the diff."}, ensure_ascii=False)
-            if applied_by_client:
-                emit(
-                    {
-                        "type": "write_trace",
-                        "eventType": "write.review.done",
-                        "toolName": "write_trace",
-                        "status": "done",
-                        "text": "写入已完成",
-                        "preview": str(review.get("filePath") or ""),
-                    }
-                )
-                return json.dumps({"success": True, "applied_by_client": True}, ensure_ascii=False)
-            emit(
-                {
-                    "type": "write_trace",
-                    "eventType": "write.review.approved",
-                    "toolName": "write_trace",
-                    "status": "running",
-                    "text": "已确认，正在写入文件",
-                    "preview": str(review.get("filePath") or ""),
-                }
-            )
+            snapshots = snapshot_write_review_files(review)
             result = __original(args, **kwargs)
-            emit(
-                {
-                    "type": "write_trace",
-                    "eventType": "write.review.done",
-                    "toolName": "write_trace",
-                    "status": "done",
-                    "text": "写入已完成",
-                    "preview": str(review.get("filePath") or ""),
-                }
-            )
+            if review is not None and not result_has_error(result):
+                request_id = f"write-review-{next(_WRITE_REVIEW_REQUEST_IDS)}"
+                emit(
+                    {
+                        "type": "write_review",
+                        "phase": "applied",
+                        "requestId": request_id,
+                        "toolName": review.get("toolName"),
+                        "filePath": review.get("filePath"),
+                        "title": review.get("title"),
+                        "meta": review.get("meta"),
+                        "diff": review.get("diff"),
+                        "snapshots": snapshots,
+                    }
+                )
             return result
 
         setattr(_wrapped, "_is_write_review_wrapper", True)

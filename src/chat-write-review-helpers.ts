@@ -3,6 +3,29 @@ export interface ChatWriteReviewRequestLike {
 	diff?: string;
 }
 
+export interface ChatWriteSnapshot {
+	path: string;
+	content: string | null;
+}
+
+export interface ChatWriteAppliedReviewInput extends ChatWriteReviewRequestLike {
+	requestId?: string;
+	toolName?: string;
+	title?: string;
+	meta?: string;
+	snapshots?: ChatWriteSnapshot[];
+}
+
+export interface ChatWriteAppliedReview {
+	requestId: string;
+	title?: string;
+	meta?: string;
+	filePath?: string;
+	diff: string;
+	snapshots: ChatWriteSnapshot[];
+	status: "pending" | "accepted" | "reverted" | "error";
+}
+
 export interface ChatWriteReviewDeletion {
 	fromLine: number;
 	toLine: number;
@@ -50,6 +73,23 @@ export interface ChatWriteReviewDocumentFrame {
 export interface ChatWriteReviewRenderedPreview {
 	text: string;
 	isPartial: boolean;
+}
+
+export function buildChatWriteAppliedReview(input: ChatWriteAppliedReviewInput): ChatWriteAppliedReview | null {
+	const requestId = input.requestId?.trim();
+	const diff = input.diff?.trim() ?? "";
+	if (!requestId || !diff) {
+		return null;
+	}
+	return {
+		requestId,
+		title: input.title?.trim() || undefined,
+		meta: input.meta?.trim() || undefined,
+		filePath: normalizeReviewPath(input.filePath) || input.filePath?.trim() || undefined,
+		diff,
+		snapshots: normalizeChatWriteSnapshots(input.snapshots),
+		status: "pending"
+	};
 }
 
 export function buildChatWriteReviewInlinePreview(
@@ -376,6 +416,23 @@ function parseDiffTargetPaths(diff?: string): string[] {
 		targets.push(candidate);
 	}
 	return targets;
+}
+
+function normalizeChatWriteSnapshots(snapshots?: ChatWriteSnapshot[]): ChatWriteSnapshot[] {
+	const result: ChatWriteSnapshot[] = [];
+	const seen = new Set<string>();
+	for (const snapshot of snapshots ?? []) {
+		const path = normalizeReviewPath(snapshot.path);
+		if (!path || seen.has(path)) {
+			continue;
+		}
+		seen.add(path);
+		result.push({
+			path,
+			content: typeof snapshot.content === "string" ? snapshot.content : null
+		});
+	}
+	return result;
 }
 
 function relativizeReviewPathToVault(reviewPath: string, vaultRootPath?: string): string | null {

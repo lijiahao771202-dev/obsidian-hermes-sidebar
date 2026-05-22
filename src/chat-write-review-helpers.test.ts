@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
 	advanceChatWriteReviewVisibleCharacters,
+	buildChatWriteAppliedReview,
 	buildChatWriteReviewAdditionMarkdown,
 	buildChatWriteReviewDocumentFrame,
 	buildChatWriteReviewInlinePreview,
@@ -13,6 +14,37 @@ import {
 	resolveChatWriteReviewTargetPath,
 	shouldAutoRevealWriteReviewTarget
 } from "./chat-write-review-helpers.ts";
+
+test("buildChatWriteAppliedReview normalizes applied diff review events", () => {
+	assert.deepEqual(
+		buildChatWriteAppliedReview({
+			requestId: " write-review-1 ",
+			title: " 已应用修改 ",
+			meta: " patch · 1 file · -1 +1 ",
+			filePath: "/Users/me/Vault/Note.md",
+			diff: "--- a/Note.md\n+++ b/Note.md\n@@ -1 +1 @@\n-old\n+new\n",
+			snapshots: [
+				{ path: "/Users/me/Vault/Note.md", content: "old\n" },
+				{ path: "/Users/me/Vault/Note.md", content: "old again\n" },
+				{ path: "", content: "skip\n" }
+			]
+		}),
+		{
+			requestId: "write-review-1",
+			title: "已应用修改",
+			meta: "patch · 1 file · -1 +1",
+			filePath: "/Users/me/Vault/Note.md",
+			diff: "--- a/Note.md\n+++ b/Note.md\n@@ -1 +1 @@\n-old\n+new",
+			snapshots: [{ path: "/Users/me/Vault/Note.md", content: "old\n" }],
+			status: "pending"
+		}
+	);
+});
+
+test("buildChatWriteAppliedReview rejects events without request id or diff", () => {
+	assert.equal(buildChatWriteAppliedReview({ requestId: "write-review-1", diff: "" }), null);
+	assert.equal(buildChatWriteAppliedReview({ requestId: "", diff: "+new" }), null);
+});
 
 test("buildChatWriteReviewInlinePreview maps replace hunks to original note lines", () => {
 	const preview = buildChatWriteReviewInlinePreview({

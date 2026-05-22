@@ -1,8 +1,8 @@
 .hermes-sidebar-view {
-	--hermes-radius-xs: 4px;
-	--hermes-radius-sm: 8px;
-	--hermes-radius-md: 12px;
-	--hermes-radius-lg: 16px;
+	--hermes-radius-xs: 8px;
+	--hermes-radius-sm: 12px;
+	--hermes-radius-md: 16px;
+	--hermes-radius-lg: 20px;
 	--hermes-border: color-mix(in srgb, var(--background-modifier-border) 60%, transparent);
 	--hermes-border-soft: color-mix(in srgb, var(--background-modifier-border) 35%, transparent);
 	--hermes-border-hairline: color-mix(in srgb, var(--background-modifier-border) 20%, transparent);
@@ -25,7 +25,9 @@
 	height: 100%;
 	min-height: 0;
 	color: var(--text-normal);
-	background: var(--background-primary);
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--background-secondary) 30%, var(--background-primary)) 0%, var(--background-primary) 40%),
+		var(--background-primary);
 }
 
 .hermes-sidebar-header {
@@ -34,8 +36,10 @@
 	justify-content: space-between;
 	gap: 12px;
 	padding: 14px 15px 12px;
-	border-bottom: 1px solid var(--hermes-border-hairline);
-	background: var(--background-primary);
+	border-bottom: 1px solid var(--hermes-border-soft);
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 96%, var(--background-secondary) 4%), color-mix(in srgb, var(--background-primary) 90%, transparent));
+	backdrop-filter: blur(18px);
 }
 
 .hermes-sidebar-title-wrap {
@@ -46,14 +50,11 @@
 }
 
 .hermes-sidebar-title {
-	font-size: 16px;
-	font-weight: 700;
+	font-size: 15px;
+	font-weight: 800;
 	line-height: 1.1;
 	color: var(--text-normal);
-	letter-spacing: -0.025em;
-	background: linear-gradient(135deg, var(--text-normal) 40%, var(--interactive-accent) 100%);
-	-webkit-background-clip: text;
-	-webkit-text-fill-color: transparent;
+	letter-spacing: -0.01em;
 }
 
 .hermes-sidebar-meta {
@@ -72,23 +73,23 @@
 
 .hermes-sidebar-meta::before {
 	content: "";
-	width: 6px;
-	height: 6px;
+	width: 6.5px;
+	height: 6.5px;
 	flex: 0 0 auto;
 	border-radius: 999px;
 	background: color-mix(in srgb, var(--interactive-accent) 82%, var(--text-success));
 	box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--interactive-accent) 24%, transparent);
-	animation: hermes-status-pulse 2.2s infinite ease-in-out;
+	animation: hermes-status-pulse 2s infinite ease-in-out;
 }
 
 @keyframes hermes-status-pulse {
 	0% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--interactive-accent) 35%, transparent);
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--interactive-accent) 40%, transparent);
 		transform: scale(1);
 	}
 	70% {
-		box-shadow: 0 0 0 5px color-mix(in srgb, var(--interactive-accent) 0%, transparent);
-		transform: scale(1.08);
+		box-shadow: 0 0 0 4.5px color-mix(in srgb, var(--interactive-accent) 0%, transparent);
+		transform: scale(1.05);
 	}
 	100% {
 		box-shadow: 0 0 0 0 color-mix(in srgb, var(--interactive-accent) 0%, transparent);
@@ -100,7 +101,7 @@
 	display: inline-flex;
 	align-items: center;
 	flex: 0 0 auto;
-	gap: 6px;
+	gap: 7px;
 }
 
 .hermes-sidebar-button,
@@ -117,50 +118,33 @@
 }
 
 .hermes-sidebar-button {
-	min-height: 26px;
-	border: 1px solid var(--hermes-border-soft);
-	background: var(--background-secondary-alt);
+	min-height: 31px;
+	border: 1px solid var(--hermes-border);
+	background: var(--hermes-surface-raised);
 	color: var(--text-normal);
-	border-radius: 6px;
-	padding: 0 10px;
+	border-radius: var(--hermes-radius-sm);
+	padding: 0 11px;
 	font-size: 11px;
-	font-weight: 550;
+	font-weight: 650;
 	line-height: 1.1;
 	cursor: pointer;
-	box-shadow: none;
+	box-shadow: var(--hermes-shadow-low);
 }
 
 .hermes-sidebar-icon-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 26px;
-	height: 26px;
-	min-width: 26px;
+	width: 32px;
+	min-width: 32px;
 	padding: 0;
-	border: none;
-	background: transparent;
 	color: var(--text-muted);
-	border-radius: 6px;
-	cursor: pointer;
 	box-shadow: none;
-	transition: background-color var(--hermes-transition), color var(--hermes-transition), transform var(--hermes-transition);
-}
-
-.hermes-sidebar-icon-button:hover {
-	border-color: transparent;
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-	transform: scale(1.05);
-}
-
-.hermes-sidebar-icon-button:active {
-	transform: scale(0.95);
 }
 
 .hermes-sidebar-icon-button svg {
-	width: 15px;
-	height: 15px;
+	width: 16px;
+	height: 16px;
 	stroke-width: 2;
 }
 
@@ -196,11 +180,12 @@
 .hermes-sidebar-history {
 	display: none;
 	margin: 9px 11px 0;
-	padding: 10px;
-	border-radius: var(--hermes-radius-md);
-	border: 1px solid var(--hermes-border-soft);
-	background: var(--background-secondary-alt);
-	box-shadow: none;
+	padding: 8px;
+	border-radius: var(--hermes-radius-lg);
+	border: 1px solid var(--hermes-border);
+	background:
+		linear-gradient(180deg, var(--hermes-surface-raised), color-mix(in srgb, var(--background-primary) 91%, var(--background-secondary) 9%));
+	box-shadow: var(--hermes-shadow-soft);
 }
 
 .hermes-sidebar-view.hermes-sidebar-history-open .hermes-sidebar-history {
@@ -233,18 +218,20 @@
 	grid-template-columns: minmax(0, 1fr) auto;
 	gap: 8px;
 	align-items: center;
-	padding: 4px 8px;
+	padding: 4px;
 	border: 1px solid transparent;
 	border-radius: var(--hermes-radius-sm);
 }
 
 .hermes-sidebar-history-item:hover {
-	background: var(--background-primary);
+	background: color-mix(in srgb, var(--background-secondary) 62%, transparent);
 }
 
 .hermes-sidebar-history-item.is-active {
-	border-color: var(--interactive-accent);
-	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+	border-color: var(--hermes-accent-border);
+	background:
+		linear-gradient(90deg, color-mix(in srgb, var(--interactive-accent) 8%, transparent), transparent),
+		var(--hermes-accent-softer);
 }
 
 .hermes-sidebar-history-main {
@@ -352,18 +339,13 @@
 }
 
 .hermes-sidebar-health {
-	margin: 10px 14px 0;
+	margin: 8px 11px 0;
 	border: 1px solid var(--hermes-border-soft);
-	border-radius: 8px;
-	background: var(--background-secondary-alt);
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
-	transition: all var(--hermes-transition);
-}
-
-.hermes-sidebar-health:hover {
-	border-color: var(--hermes-border);
-	background: color-mix(in srgb, var(--background-modifier-hover) 60%, var(--background-secondary-alt));
-	box-shadow: var(--hermes-shadow-low);
+	border-radius: var(--hermes-radius-md);
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 94%, var(--background-secondary) 6%), color-mix(in srgb, var(--background-primary) 86%, transparent)),
+		var(--background-primary);
+	box-shadow: var(--hermes-shadow-inset);
 }
 
 .hermes-sidebar-health-summary {
@@ -371,8 +353,8 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	min-height: 28px;
-	padding: 5px 12px;
+	min-height: 32px;
+	padding: 0 9px;
 	cursor: pointer;
 	list-style: none;
 }
@@ -383,10 +365,10 @@
 
 .hermes-sidebar-health-title {
 	color: var(--text-muted);
-	font-size: 11px;
-	font-weight: 600;
-	letter-spacing: 0;
-	text-transform: none;
+	font-size: 10px;
+	font-weight: 760;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
 }
 
 .hermes-sidebar-health-pill {
@@ -394,38 +376,30 @@
 	overflow: hidden;
 	white-space: nowrap;
 	text-overflow: ellipsis;
-	font-size: 10px;
-	font-weight: 600;
-	padding: 2px 8px;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
-	color: var(--interactive-accent);
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 15%, var(--background-modifier-border));
+	color: var(--text-normal);
+	font-size: 11.5px;
+	font-weight: 690;
 }
 
 .hermes-sidebar-health-grid {
 	display: grid;
-	gap: 2px;
-	padding: 4px 12px 10px;
+	gap: 1px;
+	padding: 0 10px 10px;
 }
 
 .hermes-sidebar-health-item {
 	display: grid;
-	grid-template-columns: 80px minmax(0, 1fr);
+	grid-template-columns: 66px minmax(0, 1fr);
 	gap: 8px;
 	align-items: baseline;
 	padding: 5px 0;
 	border-top: 1px solid var(--hermes-border-soft);
 }
 
-.hermes-sidebar-health-item:first-child {
-	border-top: none;
-}
-
 .hermes-sidebar-health-label {
 	color: var(--text-faint);
 	font-size: 10px;
-	font-weight: 600;
+	font-weight: 720;
 }
 
 .hermes-sidebar-health-value {
@@ -640,11 +614,12 @@
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
-	padding: 16px 14px;
+	padding: 13px 11px 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
-	background: transparent;
+	gap: 11px;
+	background:
+		linear-gradient(180deg, transparent 0, color-mix(in srgb, var(--background-secondary) 18%, transparent) 100%);
 }
 
 .hermes-sidebar-empty-state {
@@ -662,8 +637,8 @@
 
 .hermes-sidebar-chat-row {
 	display: flex;
-	align-items: flex-start;
-	gap: 12px;
+	align-items: flex-end;
+	gap: 9px;
 	min-width: 0;
 }
 
@@ -695,33 +670,32 @@
 	width: 28px;
 	height: 28px;
 	flex: 0 0 28px;
-	border-radius: 8px;
+	border-radius: 999px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 11px;
-	font-weight: 600;
+	font-size: 12px;
+	font-weight: 750;
 	color: white;
 	user-select: none;
 	overflow: hidden;
-	transition: transform var(--hermes-transition);
-}
-
-.hermes-sidebar-avatar:hover {
-	transform: scale(1.05);
 }
 
 .hermes-sidebar-avatar.is-ai {
-	background: var(--background-secondary-alt);
-	border: 1px solid var(--hermes-border-soft);
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+	background: var(--background-primary);
+	border: 1px solid var(--hermes-border);
+	box-shadow:
+		0 0 0 3px color-mix(in srgb, var(--background-primary) 72%, transparent),
+		var(--hermes-shadow-low);
 }
 
 .hermes-sidebar-avatar.is-user {
-	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-secondary-alt));
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 15%, var(--hermes-border-soft));
-	color: var(--text-accent);
-	font-weight: 700;
+	background: linear-gradient(
+		135deg,
+		color-mix(in srgb, var(--text-muted) 72%, var(--interactive-accent) 28%),
+		var(--text-normal)
+	);
+	box-shadow: 0 7px 16px rgba(15, 23, 42, 0.11);
 }
 
 .hermes-sidebar-avatar-image {
@@ -732,12 +706,12 @@
 }
 
 .hermes-sidebar-bubble {
-	max-width: min(85%, 600px);
+	max-width: min(88%, 600px);
 	min-width: 0;
-	border-radius: 12px;
-	padding: 10px 14px;
-	border: 1px solid transparent;
-	box-shadow: none;
+	border-radius: var(--hermes-radius-md);
+	padding: 12px 14px;
+	border: 1px solid var(--hermes-border-soft);
+	box-shadow: var(--hermes-shadow-low);
 	transition: all 0.2s ease;
 }
 
@@ -746,20 +720,24 @@
 }
 
 .hermes-sidebar-bubble.is-ai {
-	border-radius: 14px 14px 14px 4px;
-	background: var(--background-primary-alt);
-	border: 1px solid var(--hermes-border-soft);
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.015), 0 2px 6px rgba(0, 0, 0, 0.01);
+	border-radius: var(--hermes-radius-md) var(--hermes-radius-md) var(--hermes-radius-md) 4px;
 }
 
 .hermes-sidebar-bubble.is-ai.final {
-	background: var(--background-primary-alt);
+	background:
+		linear-gradient(180deg, var(--hermes-surface-raised), color-mix(in srgb, var(--background-primary) 94%, var(--background-secondary) 6%));
 }
 
 .hermes-sidebar-bubble.is-ai.final.is-interim {
 	position: relative;
-	border-color: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
-	background: color-mix(in srgb, var(--interactive-accent) 3%, var(--background-primary-alt));
+	max-width: min(82%, 540px);
+	padding: 11px 13px 12px;
+	border-color: color-mix(in srgb, var(--interactive-accent) 24%, var(--hermes-border-soft));
+	background: linear-gradient(
+		180deg,
+		color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary)),
+		color-mix(in srgb, var(--background-secondary-alt) 40%, transparent)
+	);
 	box-shadow: none;
 }
 
@@ -769,7 +747,7 @@
 	align-items: center;
 	margin-bottom: 7px;
 	padding: 2px 7px;
-	border-radius: 4px;
+	border-radius: var(--hermes-radius-xs);
 	background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
 	color: color-mix(in srgb, var(--text-normal) 82%, var(--interactive-accent) 18%);
 	font-size: 10px;
@@ -786,16 +764,21 @@
 }
 
 .hermes-sidebar-bubble.is-user {
-	border-radius: 14px 14px 4px 14px;
-	background: linear-gradient(135deg, var(--interactive-accent) 0%, color-mix(in srgb, var(--interactive-accent) 88%, black 12%) 100%);
-	color: var(--text-on-accent);
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 10%, transparent);
-	box-shadow: 0 4px 14px color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+	border-radius: var(--hermes-radius-md) var(--hermes-radius-md) 4px var(--hermes-radius-md);
+	border-color: color-mix(in srgb, var(--interactive-accent) 24%, transparent);
+	background: linear-gradient(
+		135deg,
+		var(--interactive-accent) 0%,
+		color-mix(in srgb, var(--interactive-accent) 85%, var(--text-normal) 15%) 100%
+	);
+	box-shadow:
+		var(--hermes-shadow-inset),
+		0 6px 16px color-mix(in srgb, var(--interactive-accent) 12%, transparent);
 }
 
 .hermes-sidebar-message-body {
-	font-size: 13px;
-	line-height: 1.6;
+	font-size: 13.5px;
+	line-height: 1.62;
 	color: var(--text-normal);
 	word-break: break-word;
 }
@@ -821,25 +804,25 @@
 }
 
 .hermes-sidebar-message-body :is(h1, h2, h3, h4, h5, h6) {
-	margin: 0.8em 0 0.3em;
+	margin: 0.82em 0 0.38em;
 	padding: 0;
 	border: 0;
-	color: var(--text-accent);
-	font-weight: 600;
-	line-height: 1.3;
-	letter-spacing: -0.01em;
+	color: var(--text-normal);
+	font-weight: 760;
+	line-height: 1.34;
+	letter-spacing: 0;
 }
 
 .hermes-sidebar-message-body h1 {
-	font-size: 1.15em;
+	font-size: 1.2em;
 }
 
 .hermes-sidebar-message-body h2 {
-	font-size: 1.1em;
+	font-size: 1.14em;
 }
 
 .hermes-sidebar-message-body h3 {
-	font-size: 1.05em;
+	font-size: 1.07em;
 }
 
 .hermes-sidebar-message-body :is(h4, h5, h6) {
@@ -855,12 +838,12 @@
 }
 
 .hermes-sidebar-message-body p {
-	margin: 0.5em 0;
+	margin: 0.48em 0;
 }
 
 .hermes-sidebar-message-body hr {
 	height: 1px;
-	margin: 0.8em 0;
+	margin: 0.85em 0;
 	border: 0;
 	background: var(--hermes-border-soft);
 }
@@ -868,64 +851,16 @@
 .hermes-sidebar-message-body blockquote {
 	margin: 0.7em 0;
 	padding: 0.35em 0.75em;
-	border-inline-start: 3px solid var(--interactive-accent);
+	border-inline-start: 2px solid var(--hermes-accent-border);
 	border-radius: 0 var(--hermes-radius-sm) var(--hermes-radius-sm) 0;
 	background: color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary));
 	color: var(--text-muted);
 }
 
-/* Reset lists to be clean and neat in chat rows */
-.hermes-sidebar-message-body ul {
-	list-style: none;
-	padding-left: 12px;
-	margin: 6px 0;
-}
-
-.hermes-sidebar-message-body ul li {
-	position: relative;
-	padding-left: 12px;
-	line-height: 1.6;
-}
-
-.hermes-sidebar-message-body ul li::before {
-	content: "•";
-	position: absolute;
-	left: 0;
-	color: var(--text-accent);
-	font-weight: bold;
-}
-
-/* User bubbles list bullets */
-.hermes-sidebar-bubble.is-user .hermes-sidebar-message-body ul li::before {
-	color: var(--text-on-accent);
-}
-
+.hermes-sidebar-message-body ul,
 .hermes-sidebar-message-body ol {
-	counter-reset: hermes-list-counter;
-	list-style: none;
-	padding-left: 12px;
-	margin: 6px 0;
-}
-
-.hermes-sidebar-message-body ol li {
-	position: relative;
-	counter-increment: hermes-list-counter;
-	padding-left: 16px;
-	line-height: 1.6;
-}
-
-.hermes-sidebar-message-body ol li::before {
-	content: counter(hermes-list-counter) ".";
-	position: absolute;
-	left: 0;
-	color: var(--text-accent);
-	font-weight: 600;
-	font-size: 0.95em;
-}
-
-/* User bubbles list numbers */
-.hermes-sidebar-bubble.is-user .hermes-sidebar-message-body ol li::before {
-	color: var(--text-on-accent);
+	margin: 0.5em 0;
+	padding-left: 19px;
 }
 
 .hermes-sidebar-message-body li + li {
@@ -934,26 +869,23 @@
 
 .hermes-sidebar-message-body code {
 	border-radius: var(--hermes-radius-xs);
-	padding: 0.15em 0.35em;
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
+	padding: 0.1em 0.32em;
+	background: color-mix(in srgb, var(--background-secondary) 72%, transparent);
 	color: var(--text-normal);
-	font-family: var(--font-monospace);
-	font-size: 0.9em;
+	font-size: 0.92em;
 }
 
 .hermes-sidebar-message-body pre {
 	overflow-x: auto;
 	border: 1px solid var(--hermes-border-soft);
 	border-radius: var(--hermes-radius-md);
-	padding: 8px 10px;
+	padding: 10px 11px;
 	background: color-mix(in srgb, var(--background-secondary) 84%, var(--background-primary));
 }
 
 .hermes-sidebar-message-body pre code {
 	padding: 0;
 	background: transparent;
-	border: none;
 }
 
 .hermes-sidebar-message-body table {
@@ -970,57 +902,18 @@
 	border: 1px solid var(--hermes-border-soft);
 }
 
-.hermes-sidebar-message-body :is(a, .internal-link, a.internal-link) {
-	display: inline-flex;
-	align-items: center;
-	max-width: 100%;
-	text-decoration: none !important;
-	border: 1px solid color-mix(in srgb, var(--text-accent) 20%, var(--background-modifier-border)) !important;
-	border-radius: 999px !important;
-	padding: 2px 10px !important;
-	font-size: 0.88em;
-	font-weight: 550;
-	margin: 2px 4px 2px 0;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	vertical-align: middle;
-	transition: all var(--hermes-transition);
-}
-
-.hermes-sidebar-bubble.is-ai .hermes-sidebar-message-body :is(.internal-link, a.internal-link) {
-	background: color-mix(in srgb, var(--text-accent) 6%, var(--background-primary));
-	color: var(--text-accent);
-}
-
-.hermes-sidebar-bubble.is-ai .hermes-sidebar-message-body :is(.internal-link, a.internal-link):hover {
-	background: var(--text-accent);
-	border-color: var(--text-accent) !important;
-	color: var(--text-on-accent);
-}
-
-.hermes-sidebar-bubble.is-ai .hermes-sidebar-message-body a:not(.internal-link) {
-	background: color-mix(in srgb, var(--link-color) 6%, var(--background-primary));
-	border-color: color-mix(in srgb, var(--link-color) 18%, var(--background-modifier-border)) !important;
+.hermes-sidebar-message-body a {
 	color: var(--link-color);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
 }
 
-.hermes-sidebar-bubble.is-ai .hermes-sidebar-message-body a:not(.internal-link):hover {
-	background: var(--link-color);
-	border-color: var(--link-color) !important;
-	color: var(--text-on-accent);
-}
-
-.hermes-sidebar-bubble.is-user .hermes-sidebar-message-body :is(a, .internal-link, a.internal-link) {
-	background: rgba(255, 255, 255, 0.12) !important;
-	border: 1px solid rgba(255, 255, 255, 0.25) !important;
-	color: var(--text-on-accent) !important;
-}
-
-.hermes-sidebar-bubble.is-user .hermes-sidebar-message-body :is(a, .internal-link, a.internal-link):hover {
-	background: rgba(255, 255, 255, 0.24) !important;
-	border-color: rgba(255, 255, 255, 0.4) !important;
-	color: var(--text-on-accent) !important;
+.hermes-sidebar-message-body :is(.internal-link, a.internal-link) {
+	border-radius: 4px;
+	padding: 0 2px;
+	background: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
+	color: color-mix(in srgb, var(--interactive-accent) 76%, var(--text-normal));
+	text-decoration-color: color-mix(in srgb, var(--interactive-accent) 42%, transparent);
 }
 
 .hermes-sidebar-run-trace {
@@ -1036,35 +929,34 @@
 }
 
 .hermes-sidebar-run-trace-summary {
-	display: inline-flex;
+	display: grid;
+	grid-template-columns: auto minmax(18px, 1fr) 26px;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 	min-width: 0;
-	padding: 4px 12px;
-	border-radius: 999px;
-	background: var(--background-secondary-alt);
-	border: 1px solid var(--hermes-border-soft);
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.01);
-	cursor: pointer;
-	transition: all var(--hermes-transition);
-	width: fit-content;
-	margin: 2px 0 4px;
-}
-
-.hermes-sidebar-run-trace-summary:hover {
-	background: var(--background-modifier-hover);
-	border-color: var(--hermes-border);
-	box-shadow: var(--hermes-shadow-low);
+	padding: 4px 0 7px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	position: relative;
 }
 
 .hermes-sidebar-run-trace-summary::after {
-	display: none !important;
+	content: "";
+	grid-column: 2;
+	height: 1px;
+	background: linear-gradient(
+		90deg,
+		color-mix(in srgb, var(--background-modifier-border) 46%, transparent),
+		color-mix(in srgb, var(--background-modifier-border) 16%, transparent)
+	);
 }
 
 .hermes-sidebar-activity-group-summary {
-	padding: 4px 12px;
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.01);
+	padding: 3px 0 8px;
+	box-shadow: none;
 }
 
 .hermes-sidebar-run-trace-summary-text {
@@ -1080,33 +972,57 @@
 }
 
 .hermes-sidebar-run-trace-toggle {
-	border: none;
-	background: transparent;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 50%, transparent);
+	border-radius: var(--hermes-radius-xs);
+	background: color-mix(in srgb, var(--background-primary) 80%, transparent);
 	color: var(--text-faint);
+	cursor: pointer;
 	padding: 0;
-	width: 16px;
-	height: 16px;
+	justify-self: end;
+	width: 24px;
+	height: 24px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	transform-origin: 50% 50%;
 	box-shadow: none;
-	transition: transform 150ms ease, color 150ms ease;
-	pointer-events: none;
-	min-width: 16px;
-	min-height: 16px;
+	transition:
+		transform 150ms ease,
+		color 150ms ease,
+		border-color 150ms ease,
+		background-color 150ms ease,
+		box-shadow 150ms ease;
+	appearance: none;
+	-webkit-appearance: none;
+	min-width: 24px;
+	min-height: 24px;
 	line-height: 1;
 }
 
 .hermes-sidebar-run-trace-toggle svg {
-	width: 13px;
-	height: 13px;
+	width: 14px;
+	height: 14px;
 	stroke-width: 2.2;
+	pointer-events: none;
+}
+
+.hermes-sidebar-run-trace-toggle:hover {
+	color: var(--text-normal);
+	border-color: var(--hermes-accent-border);
+	background: var(--hermes-accent-softer);
+	box-shadow: 0 3px 9px rgba(15, 23, 42, 0.06);
 }
 
 .hermes-sidebar-run-trace-toggle.is-expanded {
 	transform: rotate(90deg);
-	color: var(--text-muted);
+}
+
+.hermes-sidebar-run-trace-toggle:active {
+	transform: scale(0.96);
+}
+
+.hermes-sidebar-run-trace-toggle.is-expanded:active {
+	transform: rotate(90deg) scale(0.96);
 }
 
 .hermes-sidebar-run-steps {
@@ -1136,8 +1052,8 @@
 	top: 15px;
 	bottom: -6px;
 	left: 8.5px;
-	width: 1.5px;
-	background: var(--background-modifier-border);
+	width: 1px;
+	background: var(--hermes-border-soft);
 }
 
 .hermes-sidebar-run-step:last-child .hermes-sidebar-run-step-rail::before {
@@ -1147,41 +1063,32 @@
 .hermes-sidebar-run-step-rail::after {
 	content: "";
 	position: absolute;
-	top: 11px;
+	top: 9px;
 	left: 5px;
-	width: 7px;
-	height: 7px;
+	width: 8px;
+	height: 8px;
 	border-radius: 999px;
-	background: color-mix(in srgb, var(--text-faint) 40%, transparent);
+	border: 1.5px solid color-mix(in srgb, var(--text-faint) 40%, var(--background-primary));
+	background: var(--background-primary);
 	transition: all 0.2s ease;
 }
 
 .hermes-sidebar-run-step.is-running .hermes-sidebar-run-step-rail::after {
+	border-color: var(--background-primary);
 	background: var(--interactive-accent);
-	box-shadow: 0 0 0 4px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
-	animation: hermes-dot-pulse 1.6s infinite ease-in-out;
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 30%, transparent), 0 0 8px var(--interactive-accent);
 }
 
 .hermes-sidebar-run-step.is-done .hermes-sidebar-run-step-rail::after {
-	background: var(--text-success);
-	box-shadow: none;
+	border-color: var(--background-primary);
+	background: color-mix(in srgb, var(--interactive-accent) 80%, transparent);
+	box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
 }
 
 .hermes-sidebar-run-step.is-error .hermes-sidebar-run-step-rail::after {
+	border-color: var(--background-primary);
 	background: var(--text-error);
-	box-shadow: none;
-}
-
-@keyframes hermes-dot-pulse {
-	0% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--interactive-accent) 45%, transparent);
-	}
-	70% {
-		box-shadow: 0 0 0 5px color-mix(in srgb, var(--interactive-accent) 0%, transparent);
-	}
-	100% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--interactive-accent) 0%, transparent);
-	}
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-error) 30%, transparent), 0 0 8px var(--text-error);
 }
 
 .hermes-sidebar-run-step-content {
@@ -1210,7 +1117,7 @@
 
 .hermes-sidebar-run-step-state {
 	padding: 1.5px 5px;
-	border-radius: 4px;
+	border-radius: var(--hermes-radius-xs);
 	background: color-mix(in srgb, var(--background-secondary) 58%, transparent);
 	color: var(--text-faint);
 	font-family: var(--font-monospace);
@@ -1305,6 +1212,37 @@
 	line-height: 1.45;
 	white-space: pre-wrap;
 	word-break: break-word;
+}
+
+.hermes-sidebar-write-review-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 7px;
+	margin-top: 8px;
+}
+
+.hermes-sidebar-write-review-button {
+	min-height: 30px;
+	padding: 0 10px;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 78%, transparent);
+	border-radius: var(--hermes-radius-sm);
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: 11px;
+	font-weight: 650;
+	cursor: pointer;
+}
+
+.hermes-sidebar-write-review-button:hover {
+	border-color: color-mix(in srgb, var(--interactive-accent) 34%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
+	color: var(--text-normal);
+}
+
+.hermes-sidebar-write-review-button.is-accept {
+	border-color: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	color: var(--text-normal);
 }
 
 .hermes-sidebar-run-step-meta {
@@ -1563,277 +1501,6 @@
 	line-height: 1.5;
 }
 
-.hermes-write-review-card {
-	display: grid;
-	gap: 10px;
-	width: min(100%, 760px);
-	padding: 13px;
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 22%, var(--background-modifier-border));
-	border-radius: 10px;
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 96%, var(--interactive-accent)), color-mix(in srgb, var(--background-secondary) 88%, var(--background-primary)));
-	box-shadow:
-		0 16px 44px rgba(15, 23, 42, 0.08),
-		0 0 0 1px color-mix(in srgb, var(--interactive-accent) 7%, transparent);
-}
-
-.hermes-write-review-card.is-accepted {
-	border-color: color-mix(in srgb, var(--text-success) 30%, var(--background-modifier-border));
-}
-
-.hermes-write-review-card.is-reverted,
-.hermes-write-review-card.is-error {
-	border-color: color-mix(in srgb, var(--text-error) 30%, var(--background-modifier-border));
-}
-
-.hermes-write-review-header {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px;
-	min-width: 0;
-}
-
-.hermes-write-review-title-wrap {
-	display: grid;
-	gap: 2px;
-	min-width: 0;
-}
-
-.hermes-write-review-kicker {
-	color: color-mix(in srgb, var(--interactive-accent) 62%, var(--text-muted));
-	font-size: 10.5px;
-	font-weight: 750;
-	line-height: 1.2;
-}
-
-.hermes-write-review-title {
-	overflow: hidden;
-	color: var(--text-normal);
-	font-size: 14px;
-	font-weight: 760;
-	line-height: 1.25;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.hermes-write-review-status {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	min-height: 24px;
-	padding: 0 9px;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--interactive-accent) 11%, var(--background-primary));
-	color: color-mix(in srgb, var(--interactive-accent) 76%, var(--text-normal));
-	font-size: 11px;
-	font-weight: 760;
-	white-space: nowrap;
-}
-
-.hermes-write-review-status.is-accepted {
-	background: color-mix(in srgb, var(--text-success) 12%, var(--background-primary));
-	color: color-mix(in srgb, var(--text-success) 76%, var(--text-normal));
-}
-
-.hermes-write-review-status.is-reverted,
-.hermes-write-review-status.is-error {
-	background: color-mix(in srgb, var(--text-error) 10%, var(--background-primary));
-	color: color-mix(in srgb, var(--text-error) 76%, var(--text-normal));
-}
-
-.hermes-write-review-summary {
-	color: var(--text-muted);
-	font-size: 11.5px;
-	line-height: 1.45;
-}
-
-.hermes-write-review-path {
-	display: block;
-	max-width: 100%;
-	padding: 6px 8px;
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 80%, transparent);
-	border-radius: 8px;
-	background: color-mix(in srgb, var(--background-secondary) 52%, var(--background-primary));
-	color: var(--text-normal);
-	font-size: 10.5px;
-	line-height: 1.45;
-	white-space: pre-wrap;
-	word-break: break-word;
-}
-
-.hermes-write-review-files {
-	display: grid;
-	gap: 9px;
-}
-
-.hermes-write-review-file {
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 82%, transparent);
-	border-radius: 9px;
-	background: color-mix(in srgb, var(--background-primary) 72%, var(--background-secondary) 28%);
-	overflow: hidden;
-}
-
-.hermes-write-review-file-summary {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-width: 0;
-	padding: 8px 10px;
-	cursor: pointer;
-}
-
-.hermes-write-review-file-kind {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	min-width: 36px;
-	min-height: 21px;
-	padding: 0 7px;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
-	color: color-mix(in srgb, var(--interactive-accent) 72%, var(--text-normal));
-	font-size: 10px;
-	font-weight: 760;
-}
-
-.hermes-write-review-file-kind.is-created {
-	background: color-mix(in srgb, var(--text-success) 10%, var(--background-primary));
-	color: color-mix(in srgb, var(--text-success) 74%, var(--text-normal));
-}
-
-.hermes-write-review-file-kind.is-deleted {
-	background: color-mix(in srgb, var(--text-error) 10%, var(--background-primary));
-	color: color-mix(in srgb, var(--text-error) 76%, var(--text-normal));
-}
-
-.hermes-write-review-file-path {
-	flex: 1 1 auto;
-	min-width: 0;
-	overflow: hidden;
-	color: var(--text-normal);
-	font-size: 12px;
-	font-weight: 660;
-	line-height: 1.35;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.hermes-write-review-file-stats {
-	flex: 0 0 auto;
-	color: var(--text-faint);
-	font-size: 10.5px;
-	font-weight: 650;
-	white-space: nowrap;
-}
-
-.hermes-write-review-file-body {
-	display: grid;
-	gap: 8px;
-	padding: 0 10px 10px;
-}
-
-.hermes-write-review-section-label {
-	margin-bottom: 5px;
-	color: color-mix(in srgb, var(--interactive-accent) 58%, var(--text-muted));
-	font-size: 10px;
-	font-weight: 760;
-	line-height: 1.2;
-}
-
-.hermes-write-review-delete-block,
-.hermes-write-review-add-block {
-	padding: 10px 12px 10px 14px;
-	border-radius: 0 9px 9px 0;
-	box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
-}
-
-.hermes-write-review-delete-block {
-	border-left: 2px solid color-mix(in srgb, var(--text-error) 42%, var(--background-modifier-border));
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--text-error) 6%, var(--background-primary)), color-mix(in srgb, var(--text-error) 3%, var(--background-primary)));
-}
-
-.hermes-write-review-add-block {
-	border-left: 2px solid color-mix(in srgb, var(--interactive-accent) 48%, var(--background-modifier-border));
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--interactive-accent) 7%, var(--background-primary)), color-mix(in srgb, var(--interactive-accent) 3%, var(--background-primary)));
-}
-
-.hermes-write-review-delete-source {
-	margin: 0;
-	color: color-mix(in srgb, var(--text-error) 72%, var(--text-muted));
-	font-family: var(--font-text);
-	font-size: 13px;
-	line-height: 1.58;
-	white-space: pre-wrap;
-	word-break: break-word;
-	text-decoration: line-through;
-	text-decoration-thickness: 1.08px;
-	text-decoration-color: color-mix(in srgb, var(--text-error) 56%, transparent);
-}
-
-.hermes-write-review-markdown {
-	color: var(--text-normal);
-	font-size: 13.5px;
-	line-height: 1.6;
-}
-
-.hermes-write-review-markdown > :first-child {
-	margin-top: 0;
-}
-
-.hermes-write-review-markdown > :last-child {
-	margin-bottom: 0;
-}
-
-.hermes-write-review-empty {
-	padding: 10px 12px;
-	border-radius: 8px;
-	background: color-mix(in srgb, var(--background-secondary) 42%, var(--background-primary));
-	color: var(--text-faint);
-	font-size: 11.5px;
-}
-
-.hermes-write-review-actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-}
-
-.hermes-write-review-button {
-	min-height: 32px;
-	min-width: 62px;
-	padding: 0 12px;
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 78%, transparent);
-	border-radius: 8px;
-	background: var(--background-primary);
-	color: var(--text-muted);
-	font-size: 12px;
-	font-weight: 720;
-	cursor: pointer;
-	transition: transform var(--hermes-transition), background-color var(--hermes-transition), border-color var(--hermes-transition), color var(--hermes-transition);
-}
-
-.hermes-write-review-button:hover {
-	border-color: color-mix(in srgb, var(--interactive-accent) 36%, var(--background-modifier-border));
-	background: color-mix(in srgb, var(--interactive-accent) 6%, var(--background-primary));
-	color: var(--text-normal);
-	transform: translateY(-1px);
-}
-
-.hermes-write-review-button:disabled {
-	opacity: 0.58;
-	cursor: default;
-	transform: none;
-}
-
-.hermes-write-review-button.is-accept {
-	border-color: color-mix(in srgb, var(--interactive-accent) 44%, var(--background-modifier-border));
-	background: color-mix(in srgb, var(--interactive-accent) 13%, var(--background-primary));
-	color: var(--text-normal);
-}
-
 .hermes-chat-inline-review-card {
 	display: grid;
 	gap: 7px;
@@ -1852,25 +1519,6 @@
 	box-shadow:
 		0 12px 30px rgba(15, 23, 42, 0.075),
 		0 0 0 1px color-mix(in srgb, var(--interactive-accent) 8%, transparent);
-}
-
-.hermes-chat-applied-inline-review {
-	margin: 8px 0 12px;
-	border-color: color-mix(in srgb, var(--interactive-accent) 28%, var(--background-modifier-border));
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 96%, var(--interactive-accent)), color-mix(in srgb, var(--background-secondary) 84%, var(--background-primary)));
-	box-shadow:
-		0 14px 38px rgba(15, 23, 42, 0.08),
-		0 0 0 1px color-mix(in srgb, var(--interactive-accent) 8%, transparent);
-}
-
-.hermes-chat-applied-inline-review.is-accepted {
-	border-color: color-mix(in srgb, var(--text-success) 30%, var(--background-modifier-border));
-}
-
-.hermes-chat-applied-inline-review.is-reverted,
-.hermes-chat-applied-inline-review.is-error {
-	border-color: color-mix(in srgb, var(--text-error) 28%, var(--background-modifier-border));
 }
 
 .hermes-chat-inline-review-title {
@@ -1896,17 +1544,6 @@
 	font-size: 10.5px;
 	font-weight: 750;
 	white-space: nowrap;
-}
-
-.hermes-chat-inline-review-status.is-accepted {
-	background: color-mix(in srgb, var(--text-success) 12%, var(--background-primary));
-	color: color-mix(in srgb, var(--text-success) 78%, var(--text-normal));
-}
-
-.hermes-chat-inline-review-status.is-reverted,
-.hermes-chat-inline-review-status.is-error {
-	background: color-mix(in srgb, var(--text-error) 10%, var(--background-primary));
-	color: color-mix(in srgb, var(--text-error) 76%, var(--text-normal));
 }
 
 .hermes-chat-inline-review-meta {
@@ -1947,30 +1584,6 @@
 	text-decoration: line-through;
 	text-decoration-thickness: 1.25px;
 	text-decoration-color: color-mix(in srgb, var(--text-error) 72%, var(--text-muted));
-}
-
-.hermes-chat-inline-review-delete-block {
-	display: block;
-	margin: 6px 0 9px;
-	padding: 10px 12px 10px 14px;
-	border-left: 2px solid color-mix(in srgb, var(--text-error) 42%, var(--background-modifier-border));
-	border-radius: 0 10px 10px 0;
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--text-error) 6%, var(--background-primary)), color-mix(in srgb, var(--text-error) 3%, var(--background-primary)));
-	box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
-}
-
-.hermes-chat-inline-review-delete-source {
-	margin: 0;
-	color: color-mix(in srgb, var(--text-error) 70%, var(--text-muted));
-	font-family: var(--font-text);
-	font-size: 13px;
-	line-height: 1.58;
-	white-space: pre-wrap;
-	word-break: break-word;
-	text-decoration: line-through;
-	text-decoration-thickness: 1.1px;
-	text-decoration-color: color-mix(in srgb, var(--text-error) 58%, transparent);
 }
 
 .hermes-chat-inline-review-addition {
@@ -2036,15 +1649,6 @@
 	line-height: 1.35;
 }
 
-.hermes-chat-inline-review-actions {
-	margin-top: 2px;
-	justify-content: flex-end;
-}
-
-.hermes-chat-inline-review-action {
-	min-width: 54px;
-}
-
 .hermes-chat-inline-review-caret-line {
 	margin-top: 4px;
 	height: 1.2em;
@@ -2085,64 +1689,35 @@
 .hermes-sidebar-composer {
 	display: flex;
 	flex-direction: column;
-	gap: 0;
-	padding: 8px 10px 11px;
-	border-top: none;
+	gap: 8px;
+	padding: 10px 13px 13px;
+	border-top: 1px solid var(--hermes-border-soft);
 	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 58%, transparent), var(--background-primary) 34%),
-		color-mix(in srgb, var(--background-primary) 94%, transparent);
-	backdrop-filter: blur(24px);
-	-webkit-backdrop-filter: blur(24px);
-	box-shadow: 0 -1px 0 color-mix(in srgb, var(--background-modifier-border) 50%, transparent);
+		linear-gradient(180deg, transparent, var(--background-primary) 20%),
+		color-mix(in srgb, var(--background-primary) 85%, var(--background-secondary) 15%);
+	backdrop-filter: blur(20px);
 }
 
 .hermes-sidebar-composer-shell {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-	padding: 12px;
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 62%, transparent);
-	border-radius: 16px;
+	gap: 0;
+	padding: 8px 10px 10px;
+	border: 1px solid var(--hermes-border-soft);
+	border-radius: var(--hermes-radius-md);
 	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 98%, white 2%), var(--background-primary)),
-		var(--background-primary);
+		linear-gradient(180deg, var(--hermes-surface-raised), color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary) 8%));
 	box-shadow:
-		0 1px 0 color-mix(in srgb, white 42%, transparent) inset,
-		0 10px 30px rgba(15, 23, 42, 0.045),
-		0 1px 3px rgba(15, 23, 42, 0.04);
-	transition:
-		border-color var(--hermes-transition),
-		box-shadow var(--hermes-transition),
-		background-color var(--hermes-transition);
+		var(--hermes-shadow-inset),
+		0 8px 24px rgba(0, 0, 0, 0.04);
+	transition: border-color var(--hermes-transition), box-shadow var(--hermes-transition);
 }
 
 .hermes-sidebar-composer-shell:focus-within {
-	border-color: color-mix(in srgb, var(--interactive-accent) 40%, var(--background-modifier-border));
+	border-color: var(--hermes-accent-border);
 	box-shadow:
-		0 1px 0 color-mix(in srgb, white 42%, transparent) inset,
-		0 0 0 2px color-mix(in srgb, var(--interactive-accent) 13%, transparent),
-		0 12px 32px rgba(15, 23, 42, 0.06);
-}
-
-/* Strip all default/leak borders from immediate children of the composer shell */
-.hermes-sidebar-composer-shell > * {
-	border: none !important;
-	border-top: none !important;
-	border-bottom: none !important;
-	box-shadow: none !important;
-}
-
-/* Prevent double focus outlines / default browser rings inside composer */
-.hermes-sidebar-composer-shell button:focus,
-.hermes-sidebar-composer-shell button:focus-visible,
-.hermes-sidebar-composer-shell select:focus,
-.hermes-sidebar-composer-shell select:focus-visible,
-.hermes-sidebar-composer-shell textarea:focus,
-.hermes-sidebar-composer-shell textarea:focus-visible,
-.hermes-sidebar-quick-action:focus,
-.hermes-sidebar-quick-action:focus-visible {
-	outline: none !important;
-	box-shadow: none !important;
+		0 8px 28px color-mix(in srgb, var(--interactive-accent) 8%, transparent),
+		0 0 0 2px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
 }
 
 .hermes-sidebar-context {
@@ -2159,26 +1734,25 @@
 }
 
 .hermes-sidebar-quick-actions {
-	display: flex;
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
 	align-items: center;
 	gap: 8px;
 	min-width: 0;
 	order: 3;
-	padding: 3px 0 0;
-	border-top: 1px solid color-mix(in srgb, var(--background-modifier-border) 34%, transparent);
+	padding: 8px 0 7px;
+	border-top: 1px solid var(--hermes-border-soft);
 }
 
 .hermes-sidebar-quick-actions-title {
-	color: var(--text-faint);
-	font-size: 10.5px;
-	font-weight: 680;
+	color: var(--text-muted);
+	font-size: 10px;
+	font-weight: 750;
 	letter-spacing: 0;
-	text-transform: none;
-	line-height: 1.2;
+	line-height: 1;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	flex: 0 0 auto;
 }
 
 .hermes-sidebar-quick-actions-title.is-muted {
@@ -2189,7 +1763,7 @@
 	display: flex;
 	align-items: center;
 	justify-content: flex-start;
-	gap: 5px;
+	gap: 6px;
 	min-width: 0;
 	overflow-x: auto;
 	scrollbar-width: none;
@@ -2203,48 +1777,49 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	gap: 5px;
+	gap: 6px;
 	flex: 0 0 auto;
-	height: 28px;
-	padding: 0 8px !important;
-	border: 1px solid transparent !important;
-	border-radius: 7px !important;
-	background: transparent !important;
-	color: var(--text-muted) !important;
+	min-height: 31px;
+	padding: 0 10px;
+	border: 1px solid var(--hermes-border-soft);
+	border-radius: var(--hermes-radius-sm);
+	background: color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary) 8%);
+	color: var(--text-muted);
 	cursor: pointer;
-	font-size: 11.5px;
+	font-size: 11px;
 	font-weight: 650;
 	line-height: 1;
 	white-space: nowrap;
-	box-shadow: none !important;
-	transition: all 120ms ease;
 }
 
-.hermes-sidebar-quick-action:hover:not(:disabled) {
-	border-color: color-mix(in srgb, var(--background-modifier-border) 48%, transparent) !important;
-	background: color-mix(in srgb, var(--background-secondary) 74%, var(--background-primary)) !important;
-	color: var(--text-normal) !important;
-	transform: none;
-	box-shadow: none !important;
+.hermes-sidebar-quick-action:hover {
+	border-color: var(--hermes-accent-border);
+	background: var(--hermes-accent-softer);
+	color: var(--text-normal);
+	transform: translateY(-1px);
+	box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03);
 }
 
-.hermes-sidebar-quick-action:active:not(:disabled) {
-	transform: scale(0.96);
+.hermes-sidebar-quick-action:active {
+	transform: translateY(0.5px) scale(0.97);
 }
 
 .hermes-sidebar-quick-action.is-active {
-	border-color: color-mix(in srgb, var(--interactive-accent) 20%, transparent) !important;
-	background: color-mix(in srgb, var(--interactive-accent) 8%, transparent) !important;
-	color: var(--interactive-accent) !important;
-	box-shadow: none !important;
+	border-color: var(--hermes-accent-border);
+	background:
+		linear-gradient(180deg, color-mix(in srgb, var(--interactive-accent) 13%, var(--background-primary)), var(--hermes-accent-softer));
+	color: var(--text-normal);
+	box-shadow:
+		0 0 0 1.5px color-mix(in srgb, var(--interactive-accent) 8%, transparent),
+		0 4px 10px color-mix(in srgb, var(--interactive-accent) 8%, transparent);
 }
 
 .hermes-sidebar-quick-action.is-active .hermes-sidebar-quick-action-icon {
-	color: var(--interactive-accent);
+	color: color-mix(in srgb, var(--interactive-accent) 85%, var(--text-normal));
 }
 
 .hermes-sidebar-quick-action:disabled {
-	opacity: 0.3;
+	opacity: 0.42;
 	cursor: default;
 	transform: none;
 }
@@ -2264,37 +1839,33 @@
 .hermes-sidebar-quick-action-icon svg {
 	width: 14px;
 	height: 14px;
-	stroke-width: 2.15;
+	stroke-width: 2;
 }
 
 .hermes-sidebar-composer-toolbar {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr);
-	gap: 8px;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: end;
+	gap: 9px;
 	order: 4;
-	padding: 0;
+	padding-top: 8px;
+	border-top: 1px solid var(--hermes-border-soft);
 }
 
 .hermes-sidebar-controls {
-	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
+	display: flex;
 	align-items: center;
-	gap: 7px;
+	gap: 6px;
 	min-width: 0;
+	flex-wrap: wrap;
 	padding: 0;
 	border: 0;
 	background: transparent;
 	box-shadow: none;
-	overflow-x: auto;
-	scrollbar-width: none;
-}
-
-.hermes-sidebar-controls::-webkit-scrollbar {
-	display: none;
 }
 
 .hermes-sidebar-attach-button {
-	border: 1px solid var(--background-modifier-border);
+	border: 1px solid var(--hermes-border);
 	background: var(--background-primary);
 	color: var(--text-muted);
 	cursor: pointer;
@@ -2302,9 +1873,7 @@
 	font-weight: 650;
 	padding: 0 10px;
 	border-radius: var(--hermes-radius-sm);
-	height: 26px;
-	min-height: 26px;
-	line-height: 24px;
+	min-height: 32px;
 	white-space: nowrap;
 	box-shadow: none;
 }
@@ -2320,140 +1889,81 @@
 }
 
 .hermes-sidebar-control-group {
-	position: relative;
-	display: block;
+	display: grid;
+	grid-template-columns: auto minmax(0, max-content);
+	align-items: center;
+	gap: 5px;
 	min-width: 0;
-	height: 34px;
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 72%, transparent);
-	border-radius: 10px;
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 98%, white 2%), color-mix(in srgb, var(--background-secondary) 62%, var(--background-primary))),
-		var(--background-secondary);
-	box-shadow:
-		0 1px 0 color-mix(in srgb, white 42%, transparent) inset,
-		0 1px 2px rgba(15, 23, 42, 0.035);
-	overflow: hidden;
-	transition:
-		border-color 140ms ease,
-		background-color 140ms ease,
-		box-shadow 140ms ease,
-		transform 140ms ease;
+	padding: 0 8px;
+	min-height: 31px;
+	border: 1px solid var(--hermes-border-soft);
+	border-radius: var(--hermes-radius-sm);
+	background: color-mix(in srgb, var(--background-primary) 92%, var(--background-secondary) 8%);
+	transition: border-color var(--hermes-transition), background-color var(--hermes-transition), box-shadow var(--hermes-transition);
 }
 
 .hermes-sidebar-control-group:hover,
 .hermes-sidebar-control-group:focus-within {
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--background-primary) 100%, white 0%), color-mix(in srgb, var(--background-secondary) 78%, var(--background-primary))),
-		var(--background-secondary);
-	border-color: color-mix(in srgb, var(--interactive-accent) 26%, var(--background-modifier-border));
-	box-shadow:
-		0 1px 0 color-mix(in srgb, white 48%, transparent) inset,
-		0 0 0 1px color-mix(in srgb, var(--interactive-accent) 7%, transparent),
-		0 4px 12px rgba(15, 23, 42, 0.05);
-	transform: translateY(-1px);
+	border-color: var(--hermes-accent-border);
+	background: var(--hermes-accent-softer);
 }
 
 .hermes-sidebar-control-group + .hermes-sidebar-control-group {
 	margin-left: 0;
 }
 
-.hermes-sidebar-control-display {
-	position: absolute;
-	inset: 0;
-	display: grid;
-	grid-template-columns: minmax(42px, auto) minmax(0, 1fr) 20px;
-	align-items: center;
-	gap: 6px;
-	padding: 0 8px 0 11px;
-	pointer-events: none;
-}
-
 .hermes-sidebar-control-label {
-	min-width: 0;
-	font-size: 11px;
+	font-size: 10px;
 	color: var(--text-faint);
 	white-space: nowrap;
-	font-weight: 700;
-	line-height: 1;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.hermes-sidebar-control-value {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	justify-self: stretch;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	font-size: 12px;
-	font-weight: 760;
-	letter-spacing: 0;
-	color: var(--text-normal);
-	line-height: 1;
-}
-
-.hermes-sidebar-control-chevron {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	justify-self: end;
-	width: 18px;
-	height: 18px;
-	flex: 0 0 18px;
-	border-radius: 999px;
-	color: color-mix(in srgb, var(--text-muted) 88%, transparent);
-	background: color-mix(in srgb, var(--background-primary) 74%, transparent);
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--background-modifier-border) 44%, transparent) inset;
-}
-
-.hermes-sidebar-control-chevron svg {
-	width: 13px;
-	height: 13px;
-	stroke-width: 2.35;
+	font-weight: 600;
 }
 
 .hermes-sidebar-select {
-	position: absolute;
-	inset: 0;
-	width: 100%;
-	max-width: 100%;
+	width: auto;
+	max-width: 78px;
 	min-width: 0;
-	border-radius: inherit;
+	border-radius: var(--hermes-radius-xs);
 	border: 0;
 	background: transparent;
-	color: transparent;
-	padding: 0;
-	font-size: 16px;
-	height: 100%;
-	min-height: 100%;
+	color: var(--text-normal);
+	padding: 0 14px 0 0;
+	font-size: 11px;
+	font-weight: 700;
+	min-height: 24px;
 	box-shadow: none;
 	appearance: none;
 	-webkit-appearance: none;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	cursor: pointer;
-	opacity: 0;
+	background-image:
+		linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+		linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+	background-position:
+		calc(100% - 8px) calc(50% - 1px),
+		calc(100% - 4px) calc(50% - 1px);
+	background-size:
+		4px 4px,
+		4px 4px;
+	background-repeat: no-repeat;
 }
 
 .hermes-sidebar-context-mode-select {
-	max-width: none;
+	max-width: 62px;
 }
 
 .hermes-sidebar-input {
-	min-height: 52px;
-	max-height: 132px;
+	min-height: 76px;
+	max-height: 170px;
 	resize: none;
-	border-radius: 6px;
+	border-radius: var(--hermes-radius-sm);
 	border: 0;
 	background: transparent;
 	color: var(--text-normal);
-	padding: 3px 2px 1px;
-	font-size: 14px;
-	line-height: 1.5;
-	font-family: inherit;
+	padding: 7px 6px 9px;
+	font-size: 13px;
+	line-height: 1.58;
 	order: 1;
 }
 
@@ -2466,43 +1976,42 @@
 }
 
 .hermes-sidebar-send {
-	border: 1px solid color-mix(in srgb, var(--interactive-accent) 42%, transparent);
-	background:
-		linear-gradient(180deg, color-mix(in srgb, var(--interactive-accent) 94%, white 6%), var(--interactive-accent));
+	border: 1px solid color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+	background: linear-gradient(
+		135deg,
+		var(--interactive-accent) 0%,
+		color-mix(in srgb, var(--interactive-accent) 85%, var(--text-normal) 15%) 100%
+	);
 	color: var(--text-on-accent);
-	border-radius: 10px;
+	border-radius: var(--hermes-radius-sm);
 	padding: 0 16px;
-	font-size: 13px;
-	font-weight: 760;
+	font-size: 12px;
+	font-weight: 700;
 	cursor: pointer;
 	box-shadow:
-		0 1px 0 color-mix(in srgb, white 26%, transparent) inset,
-		0 9px 22px color-mix(in srgb, var(--interactive-accent) 17%, transparent);
-	height: 38px;
-	min-height: 38px;
-	width: 100%;
+		var(--hermes-shadow-inset),
+		0 4px 12px color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+	min-height: 34px;
 	white-space: nowrap;
-	transition:
-		transform 120ms ease,
-		box-shadow 140ms ease,
-		background-color 140ms ease;
-	letter-spacing: 0;
 }
 
-.hermes-sidebar-send:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--interactive-accent) 88%, black 12%);
-	box-shadow: 0 2px 10px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+.hermes-sidebar-send:hover {
+	background: linear-gradient(
+		135deg,
+		color-mix(in srgb, var(--interactive-accent) 92%, var(--text-normal) 8%),
+		color-mix(in srgb, var(--interactive-accent) 78%, var(--text-normal) 22%)
+	);
+	transform: translateY(-1px);
+	box-shadow: 0 6px 16px color-mix(in srgb, var(--interactive-accent) 26%, transparent);
 }
 
-.hermes-sidebar-send:active:not(:disabled) {
-	transform: scale(0.985);
+.hermes-sidebar-send:active {
+	transform: translateY(0.5px) scale(0.97);
 }
 
 .hermes-sidebar-send:disabled {
-	background: var(--background-secondary-alt);
-	color: var(--text-faint);
 	opacity: 0.5;
-	cursor: not-allowed;
+	cursor: default;
 	box-shadow: none;
 	transform: none;
 }
@@ -2553,15 +2062,11 @@
 	}
 
 	.hermes-sidebar-composer-toolbar {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.hermes-sidebar-controls {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: 1fr;
 	}
 
 	.hermes-sidebar-quick-actions {
-		flex-wrap: wrap;
+		grid-template-columns: 1fr;
 	}
 
 	.hermes-sidebar-send {

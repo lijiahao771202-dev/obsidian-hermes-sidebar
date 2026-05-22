@@ -1,0 +1,26 @@
+TITLE: Baer et al. (2006) Table 4 facet-correlation power, N=500;
+
+MONTECARLO:
+  NAMES = observe describe actaware nonjudge nonreact;
+  NOBSERVATIONS = 500;
+  NREPS = 5000;
+  SEED = 20261019;
+
+MODEL POPULATION:
+  [observe*0 describe*0 actaware*0 nonjudge*0 nonreact*0];
+  observe*1 describe*1 actaware*1 nonjudge*1 nonreact*1;
+  observe WITH describe*.26 actaware*.15 nonjudge*-.07 nonreact*.16;
+  describe WITH actaware*.30 nonjudge*.21 nonreact*.22;
+  actaware WITH nonjudge*.34 nonreact*.33;
+  nonjudge WITH nonreact*.34;
+
+MODEL:
+  [observe*0 describe*0 actaware*0 nonjudge*0 nonreact*0];
+  observe*1 describe*1 actaware*1 nonjudge*1 nonreact*1;
+  observe WITH describe*.26 actaware*.15 nonjudge*-.07 nonreact*.16;
+  describe WITH actaware*.30 nonjudge*.21 nonreact*.22;
+  actaware WITH nonjudge*.34 nonreact*.33;
+  nonjudge WITH nonreact*.34;
+
+OUTPUT:
+  TECH9;

@@ -15,6 +15,7 @@ from hermes_bridge import (
     compact_preview,
     extract_new_reasoning_delta,
     format_tool_status,
+    install_write_review_handlers,
     should_display_reasoning_delta,
     pick_bridge_final_text,
     preprocess_bridge_images,
@@ -320,6 +321,93 @@ class HermesBridgeHelpersTest(unittest.TestCase):
             self.assertIn("+Gamma", review["diff"])
             self.assertIn(f"+++ b/{created_path}", review["diff"])
             self.assertIn("+Fresh line", review["diff"])
+
+    def test_install_write_review_handlers_wraps_write_tools_without_confirmation_gate(self):
+        fake_registry = types.SimpleNamespace()
+        original_write_handler = lambda args, **kwargs: "write"
+        original_patch_handler = lambda args, **kwargs: "patch"
+        fake_registry.entries = {
+            "write_file": types.SimpleNamespace(handler=original_write_handler),
+            "patch": types.SimpleNamespace(handler=original_patch_handler),
+        }
+
+        def get_entry(tool_name):
+            return fake_registry.entries.get(tool_name)
+
+        fake_registry.get_entry = get_entry
+        fake_module = types.ModuleType("tools.registry")
+        fake_module.registry = fake_registry
+        previous_module = sys.modules.get("tools.registry")
+        sys.modules["tools.registry"] = fake_module
+
+        try:
+            install_write_review_handlers(types.SimpleNamespace())
+            self.assertIsNot(fake_registry.entries["write_file"].handler, original_write_handler)
+            self.assertIsNot(fake_registry.entries["patch"].handler, original_patch_handler)
+            self.assertTrue(getattr(fake_registry.entries["write_file"].handler, "_is_write_review_wrapper", False))
+            self.assertTrue(getattr(fake_registry.entries["patch"].handler, "_is_write_review_wrapper", False))
+        finally:
+            if previous_module is None:
+                sys.modules.pop("tools.registry", None)
+            else:
+                sys.modules["tools.registry"] = previous_module
+
+    def test_install_write_review_handlers_emits_post_apply_review_without_waiting(self):
+        fake_registry = types.SimpleNamespace()
+        calls = []
+
+        def original_write_handler(args, **kwargs):
+            calls.append((args, kwargs))
+            Path(args["path"]).write_text(args["content"], encoding="utf-8")
+            return json.dumps({"success": True}, ensure_ascii=False)
+
+        fake_registry.entries = {
+            "write_file": types.SimpleNamespace(handler=original_write_handler),
+            "patch": types.SimpleNamespace(handler=lambda args, **kwargs: "patch"),
+        }
+
+        def get_entry(tool_name):
+            return fake_registry.entries.get(tool_name)
+
+        fake_registry.get_entry = get_entry
+        fake_module = types.ModuleType("tools.registry")
+        fake_module.registry = fake_registry
+        previous_module = sys.modules.get("tools.registry")
+        sys.modules["tools.registry"] = fake_module
+
+        emitted = []
+        import hermes_bridge as bridge_module
+
+        original_emit = bridge_module.emit
+        bridge_module.emit = emitted.append
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "note.md"
+                path.write_text("旧标题\n", encoding="utf-8")
+
+                install_write_review_handlers(types.SimpleNamespace())
+                result = fake_registry.entries["write_file"].handler(
+                    {"path": str(path), "content": "新标题\n"},
+                    task_id="test",
+                )
+
+                self.assertEqual(json.loads(result), {"success": True})
+                self.assertEqual(path.read_text(encoding="utf-8"), "新标题\n")
+                self.assertEqual(len(calls), 1)
+                review_events = [event for event in emitted if event.get("type") == "write_review"]
+                self.assertEqual(len(review_events), 1)
+                self.assertEqual(review_events[0]["phase"], "applied")
+                self.assertIn("-旧标题", review_events[0]["diff"])
+                self.assertIn("+新标题", review_events[0]["diff"])
+                self.assertEqual(review_events[0]["snapshots"], [{"path": str(path), "content": "旧标题\n"}])
+                self.assertFalse(any(event.get("text") == "等待确认写入" for event in emitted))
+        finally:
+            bridge_module.emit = original_emit
+            if previous_module is None:
+                sys.modules.pop("tools.registry", None)
+            else:
+                sys.modules["tools.registry"] = previous_module
 
     def test_preprocess_bridge_images_enriches_prompt_with_analysis(self):
         previous_module = sys.modules.get("tools.vision_tools")

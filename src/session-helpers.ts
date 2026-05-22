@@ -345,7 +345,14 @@ export function shouldDeferScrollRestore(input: ScrollRestoreInput): boolean {
 }
 
 export function canUpdateBridgeEventWithoutFullRender(type: BridgeEventRenderType): boolean {
-	return type === "status" || type === "activity" || type === "write_trace" || type === "progress" || type === "delta";
+	return (
+		type === "status" ||
+		type === "activity" ||
+		type === "write_trace" ||
+		type === "write_review" ||
+		type === "progress" ||
+		type === "delta"
+	);
 }
 
 export function shouldShowActivityEntry(toolName?: string | null): boolean {

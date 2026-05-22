@@ -287,6 +287,7 @@ test("canUpdateBridgeEventWithoutFullRender keeps streaming events from rebuildi
 	assert.equal(canUpdateBridgeEventWithoutFullRender("status"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("activity"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("write_trace"), true);
+	assert.equal(canUpdateBridgeEventWithoutFullRender("write_review"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("progress"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("delta"), true);
 	assert.equal(canUpdateBridgeEventWithoutFullRender("final"), false);
