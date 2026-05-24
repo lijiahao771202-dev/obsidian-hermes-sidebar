@@ -12,6 +12,14 @@ export interface InlineEditAction {
 	keywords: string[];
 }
 
+export interface InlineEditToolbarAction {
+	id: string;
+	label: string;
+	shortLabel: string;
+	description: string;
+	kind: "inline-edit" | "attach-selection";
+}
+
 export interface InlineEditRange {
 	from: EditorPosition;
 	to: EditorPosition;
@@ -172,9 +180,26 @@ export function getInlineEditAction(actionId: string): InlineEditAction | undefi
 	return INLINE_EDIT_ACTIONS.find((action) => action.id === actionId);
 }
 
-export function getInlineEditToolbarActions(actions = INLINE_EDIT_ACTIONS): InlineEditAction[] {
+export function getInlineEditToolbarActions(actions = INLINE_EDIT_ACTIONS): InlineEditToolbarAction[] {
 	const toolbarIds = new Set(["polish", "format", "html", "shorten", "wiki-link", "custom"]);
-	return actions.filter((action) => toolbarIds.has(action.id));
+	return [
+		...actions
+			.filter((action) => toolbarIds.has(action.id))
+			.map((action) => ({
+				id: action.id,
+				label: action.label,
+				shortLabel: action.shortLabel,
+				description: action.description,
+				kind: "inline-edit" as const
+			})),
+		{
+			id: "attach-selection",
+			label: "发送选区到 Hermes",
+			shortLabel: "选区",
+			description: "把当前选中的内容和附近上下文直接附加到 Hermes 对话框。",
+			kind: "attach-selection"
+		}
+	];
 }
 
 export function parseSlashTrigger(line: string, cursorCh: number): { query: string; fromCh: number } | null {

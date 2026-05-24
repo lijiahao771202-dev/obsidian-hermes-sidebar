@@ -7,9 +7,11 @@ import {
 	buildChatWriteAppliedReview,
 	buildChatWriteReviewAdditionMarkdown,
 	buildChatWriteReviewDocumentFrame,
+	formatChatWriteReviewFileLabel,
 	buildChatWriteReviewInlinePreview,
 	buildChatWriteReviewRenderedMarkdownPreview,
 	buildChatWriteReviewStreamFrame,
+	formatChatWriteReviewLineDisplay,
 	getChatWriteReviewTotalAddedCharacters,
 	listChatWriteReviewMarkdownTargets,
 	resolveChatWriteReviewTargetPath,
@@ -154,6 +156,57 @@ test("buildChatWriteReviewOverview returns totals and folds extra files", () => 
 	assert.equal(overview.removals, 3);
 	assert.deepEqual(overview.visibleFiles.map((file) => file.path), ["A.md", "B.md", "C.md"]);
 	assert.deepEqual(overview.hiddenFiles.map((file) => file.path), ["D.md"]);
+});
+
+test("summarizeChatWriteReviewFiles merges repeated writes to the same file", () => {
+	const files = summarizeChatWriteReviewFiles({
+		filePath: "/Users/me/Vault/A.md",
+		diff: [
+			"diff --git a/A.md b/A.md",
+			"--- a/A.md",
+			"+++ b/A.md",
+			"@@ -1 +1 @@",
+			"-old 1",
+			"+new 1",
+			"diff --git a/A.md b/A.md",
+			"--- a/A.md",
+			"+++ b/A.md",
+			"@@ -3 +3 @@",
+			"-old 2",
+			"+new 2"
+		].join("\n")
+	});
+
+	assert.equal(files.length, 1);
+	assert.deepEqual(files[0], {
+		path: "A.md",
+		kind: "modified",
+		oldPath: "A.md",
+		newPath: "A.md",
+		additions: ["new 1", "new 2"],
+		removals: ["old 1", "old 2"]
+	});
+});
+
+test("formatChatWriteReviewFileLabel prefers note title over long absolute path", () => {
+	assert.deepEqual(formatChatWriteReviewFileLabel("/Users/me/Vault/Folder/My Note.md"), {
+		title: "My Note",
+		detail: ".../Vault/Folder/My Note.md"
+	});
+	assert.deepEqual(formatChatWriteReviewFileLabel("Inbox/Quick Capture.md"), {
+		title: "Quick Capture",
+		detail: "Inbox/Quick Capture.md"
+	});
+	assert.deepEqual(formatChatWriteReviewFileLabel("JustName.md"), {
+		title: "JustName"
+	});
+});
+
+test("formatChatWriteReviewLineDisplay keeps the row focused on the filename", () => {
+	assert.deepEqual(formatChatWriteReviewLineDisplay("/Users/me/Vault/Folder/My Note.md"), {
+		title: "My Note",
+		detail: ".../Vault/Folder/My Note.md"
+	});
 });
 
 test("resolveChatWriteReviewTargetPath matches absolute bridge paths to vault-relative markdown files", () => {

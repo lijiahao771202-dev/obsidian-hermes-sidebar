@@ -84,6 +84,16 @@ export interface ChatWriteReviewFileSummary {
 	removals: string[];
 }
 
+export interface ChatWriteReviewFileLabel {
+	title: string;
+	detail?: string;
+}
+
+export interface ChatWriteReviewLineDisplay {
+	title: string;
+	detail?: string;
+}
+
 export interface ChatWriteReviewDiffFile extends ChatWriteReviewFileSummary {
 	diff: string;
 }
@@ -228,6 +238,33 @@ export function buildChatWriteReviewOverview(
 		removals: files.reduce((total, file) => total + file.removals.length, 0),
 		visibleFiles: files.slice(0, safeLimit),
 		hiddenFiles: files.slice(safeLimit)
+	};
+}
+
+export function formatChatWriteReviewFileLabel(path: string): ChatWriteReviewFileLabel {
+	const normalizedPath = normalizeReviewPath(path).replace(/\/+$/, "");
+	if (!normalizedPath) {
+		return { title: "未命名文章" };
+	}
+
+	const segments = normalizedPath.split("/").filter(Boolean);
+	const filename = segments[segments.length - 1] ?? normalizedPath;
+	const title = filename.replace(/\.md$/i, "") || filename || "未命名文章";
+	if (segments.length <= 1) {
+		return { title };
+	}
+
+	const tailCount = Math.min(3, segments.length);
+	const tailPath = segments.slice(-tailCount).join("/");
+	const detail = segments.length > tailCount ? `.../${tailPath}` : tailPath;
+	return { title, detail: detail !== title ? detail : undefined };
+}
+
+export function formatChatWriteReviewLineDisplay(path: string): ChatWriteReviewLineDisplay {
+	const label = formatChatWriteReviewFileLabel(path);
+	return {
+		title: label.title,
+		detail: label.detail
 	};
 }
 
@@ -588,7 +625,7 @@ function collectChatWriteReviewDiffFiles(review: ChatWriteReviewRequestLike): Ch
 	finish();
 
 	if (files.length > 0) {
-		return files;
+		return mergeChatWriteReviewDiffFilesByPath(files);
 	}
 
 	const fallbackSections = extractAppliedInlineReviewSections(diff);
@@ -601,6 +638,65 @@ function collectChatWriteReviewDiffFiles(review: ChatWriteReviewRequestLike): Ch
 			diff
 		}
 	];
+}
+
+function mergeChatWriteReviewDiffFilesByPath(files: ChatWriteReviewDiffFile[]): ChatWriteReviewDiffFile[] {
+	const merged: ChatWriteReviewDiffFile[] = [];
+	const indexByPath = new Map<string, number>();
+
+	for (const file of files) {
+		const existingIndex = indexByPath.get(file.path);
+		if (existingIndex === undefined) {
+			merged.push({ ...file });
+			indexByPath.set(file.path, merged.length - 1);
+			continue;
+		}
+
+		const existing = merged[existingIndex];
+		const existingStartedMissing = !Object.prototype.hasOwnProperty.call(existing, "oldPath");
+		const nextEndsMissing = file.kind === "deleted";
+		const mergedOldPath = existingStartedMissing ? undefined : existing.oldPath;
+		const mergedNewPath = nextEndsMissing
+			? undefined
+			: Object.prototype.hasOwnProperty.call(file, "newPath")
+				? file.newPath
+				: existing.newPath;
+		const mergedKind = deriveMergedChatWriteReviewFileKind(mergedOldPath, mergedNewPath, file.kind);
+		const nextPath = mergedNewPath || mergedOldPath || file.path || existing.path;
+		const next: ChatWriteReviewDiffFile = {
+			path: nextPath,
+			kind: mergedKind,
+			additions: [...existing.additions, ...file.additions],
+			removals: [...existing.removals, ...file.removals],
+			diff: [existing.diff, file.diff].filter(Boolean).join("\n\n")
+		};
+		if (mergedOldPath) {
+			next.oldPath = mergedOldPath;
+		}
+		if (mergedNewPath) {
+			next.newPath = mergedNewPath;
+		}
+		merged[existingIndex] = next;
+	}
+
+	return merged;
+}
+
+function deriveMergedChatWriteReviewFileKind(
+	oldPath: string | undefined,
+	newPath: string | undefined,
+	fallback: ChatWriteReviewDiffFile["kind"]
+): ChatWriteReviewDiffFile["kind"] {
+	if (oldPath && !newPath) {
+		return "deleted";
+	}
+	if (!oldPath && newPath) {
+		return "created";
+	}
+	if (oldPath || newPath) {
+		return "modified";
+	}
+	return fallback;
 }
 
 function parseDiffTargetPaths(diff?: string): string[] {

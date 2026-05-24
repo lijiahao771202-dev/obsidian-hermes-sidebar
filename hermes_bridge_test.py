@@ -461,6 +461,7 @@ class HermesBridgeHelpersTest(unittest.TestCase):
                 review_events = [event for event in emitted if event.get("type") == "write_review"]
                 self.assertEqual(len(review_events), 1)
                 self.assertEqual(review_events[0]["phase"], "applied")
+                self.assertTrue(review_events[0]["requestId"].startswith("write-review-"))
                 self.assertIn("-旧标题", review_events[0]["diff"])
                 self.assertIn("+新标题", review_events[0]["diff"])
                 self.assertEqual(review_events[0]["snapshots"], [{"path": str(path), "content": "旧标题\n"}])

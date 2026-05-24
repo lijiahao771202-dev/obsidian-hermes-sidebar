@@ -96,6 +96,15 @@ export interface MessageKindLike extends MessageIdLike {
 	kind?: string | null;
 }
 
+export interface WriteReviewLike {
+	requestId?: string | null;
+	members?: WriteReviewLike[] | null;
+}
+
+export interface WriteReviewMessageLike extends MessageKindLike {
+	writeReview?: WriteReviewLike | null;
+}
+
 export type BridgeEventRenderType =
 	| "status"
 	| "activity"
@@ -580,6 +589,44 @@ export function getAppendIndexAfterLatestTurnAssistant(
 		}
 	}
 
+	return undefined;
+}
+
+export function writeReviewContainsRequestId(review: WriteReviewLike | null | undefined, requestId: string): boolean {
+	if (!review || !requestId) {
+		return false;
+	}
+	if ((review.requestId || "").trim() === requestId) {
+		return true;
+	}
+	return (review.members ?? []).some((member) => writeReviewContainsRequestId(member, requestId));
+}
+
+export function findMatchingWriteReviewMessageIndex(
+	messages: WriteReviewMessageLike[],
+	requestIds: Set<string>,
+	preferredMessageId?: string
+): number | undefined {
+	if (preferredMessageId) {
+		const preferredIndex = messages.findIndex(
+			(message) => message.id === preferredMessageId && (message.kind || "").trim() === "write-review" && !!message.writeReview
+		);
+		if (preferredIndex >= 0) {
+			return preferredIndex;
+		}
+	}
+
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if ((message.kind || "").trim() !== "write-review" || !message.writeReview) {
+			continue;
+		}
+		for (const requestId of requestIds) {
+			if (writeReviewContainsRequestId(message.writeReview, requestId)) {
+				return index;
+			}
+		}
+	}
 	return undefined;
 }
 

@@ -44,9 +44,10 @@ test("filterInlineEditActions keeps Hermes writing and note enhancement actions 
 test("getInlineEditToolbarActions keeps the floating toolbar focused", () => {
 	assert.deepEqual(
 		getInlineEditToolbarActions().map((action) => action.id),
-		["polish", "format", "html", "shorten", "wiki-link", "custom"]
+		["polish", "format", "html", "shorten", "wiki-link", "custom", "attach-selection"]
 	);
-	assert.equal(getInlineEditToolbarActions().length <= 6, true);
+	assert.equal(getInlineEditToolbarActions().length <= 7, true);
+	assert.equal(getInlineEditToolbarActions().at(-1)?.kind, "attach-selection");
 });
 
 test("resolveSelectionSourceRange maps preview selections through rendered markdown text", () => {

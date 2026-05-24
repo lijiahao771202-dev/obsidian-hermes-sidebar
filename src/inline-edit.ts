@@ -27,6 +27,7 @@ import {
 	InlineEditAction,
 	InlineEditActionMode,
 	InlineEditDraftState,
+	InlineEditToolbarAction,
 	buildInlineEditPrompt,
 	comparePositions,
 	filterInlineEditActions,
@@ -67,6 +68,12 @@ export interface InlineEditManagerOptions {
 	app: App;
 	getSettings: () => InlineEditRuntimeSettings;
 	run: (input: InlineEditRunInput) => { promise: Promise<InlineEditRunResult>; cancel: () => void };
+	attachSelectionToChat?: (context: {
+		selectedText: string;
+		noteContext: string;
+		noteTitle: string;
+		filePath: string;
+	}) => Promise<void>;
 }
 
 interface InlineEditSelectionContext {
@@ -292,8 +299,11 @@ export class InlineEditManager {
 					text: action.shortLabel,
 					attr: { type: "button", title: action.description }
 				});
+				if (action.kind === "attach-selection") {
+					button.addClass("is-selection-send");
+				}
 				button.addEventListener("mousedown", (event) => event.preventDefault());
-				button.addEventListener("click", () => void this.runSelectionAction(action.id));
+				button.addEventListener("click", () => void this.handleToolbarAction(action));
 			}
 		}
 
@@ -303,15 +313,51 @@ export class InlineEditManager {
 			return;
 		}
 		const toolbarWidth = this.selectionToolbarEl.offsetWidth || 420;
-		const left = Math.min(window.innerWidth - toolbarWidth - 12, Math.max(12, rect.left - 48));
-		this.selectionToolbarEl.style.left = `${Math.max(12, left)}px`;
-		this.selectionToolbarEl.style.top = `${Math.max(12, rect.top - 52)}px`;
+		const toolbarHeight = this.selectionToolbarEl.offsetHeight || 46;
+		const centerX = rect.left + (rect.right - rect.left) / 2;
+		const left = Math.min(window.innerWidth - toolbarWidth - 16, Math.max(16, centerX - toolbarWidth / 2));
+		const preferredTop = rect.top - toolbarHeight - 14;
+		const fallbackTop = Math.min(window.innerHeight - toolbarHeight - 16, rect.bottom + 12);
+		const top = preferredTop >= 16 ? preferredTop : Math.max(16, fallbackTop);
+		this.selectionToolbarEl.style.left = `${Math.max(16, left)}px`;
+		this.selectionToolbarEl.style.top = `${top}px`;
 		this.selectionToolbarEl.addClass("is-visible");
 	}
 
 	private hideSelectionToolbar(): void {
 		this.selectionToolbarEl?.remove();
 		this.selectionToolbarEl = null;
+	}
+
+	private async handleToolbarAction(action: InlineEditToolbarAction): Promise<void> {
+		if (action.kind === "attach-selection") {
+			await this.attachCurrentSelectionToChat();
+			return;
+		}
+		await this.runSelectionAction(action.id);
+	}
+
+	private async attachCurrentSelectionToChat(): Promise<void> {
+		const selectionContext = this.getSelectionContext();
+		if (!selectionContext) {
+			return;
+		}
+		this.hideSelectionToolbar();
+		if (!this.options.attachSelectionToChat) {
+			new Notice("当前没有可用的 Hermes 对话框。");
+			return;
+		}
+		try {
+			await this.options.attachSelectionToChat({
+				selectedText: selectionContext.text,
+				noteContext: selectionContext.noteContext,
+				noteTitle: selectionContext.file.basename,
+				filePath: selectionContext.file.path
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			new Notice(`附加选区失败：${message}`);
+		}
 	}
 
 	private getSelectionContext(): InlineEditSelectionContext | null {

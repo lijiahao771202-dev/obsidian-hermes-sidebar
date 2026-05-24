@@ -334,22 +334,33 @@ function getAppendIndexAfterTurnMessages(messages, turnStartMessageId) {
   }
   return messages.length;
 }
-function getAppendIndexAfterLatestTurnAssistant(messages, turnStartMessageId) {
-  const anchorIndex = turnStartMessageId ? messages.findIndex((message) => message.id === turnStartMessageId) : -1;
-  if (anchorIndex < 0) {
-    return void 0;
+function writeReviewContainsRequestId(review, requestId) {
+  if (!review || !requestId) {
+    return false;
   }
-  let nextUserIndex = messages.length;
-  for (let index = anchorIndex + 1; index < messages.length; index += 1) {
-    if (messages[index].kind === "user") {
-      nextUserIndex = index;
-      break;
+  if ((review.requestId || "").trim() === requestId) {
+    return true;
+  }
+  return (review.members ?? []).some((member) => writeReviewContainsRequestId(member, requestId));
+}
+function findMatchingWriteReviewMessageIndex(messages, requestIds, preferredMessageId) {
+  if (preferredMessageId) {
+    const preferredIndex = messages.findIndex(
+      (message) => message.id === preferredMessageId && (message.kind || "").trim() === "write-review" && !!message.writeReview
+    );
+    if (preferredIndex >= 0) {
+      return preferredIndex;
     }
   }
-  for (let index = nextUserIndex - 1; index > anchorIndex; index -= 1) {
-    const kind = (messages[index].kind || "").trim();
-    if (kind === "final" || kind === "write-review" || kind === "progress") {
-      return index + 1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if ((message.kind || "").trim() !== "write-review" || !message.writeReview) {
+      continue;
+    }
+    for (const requestId of requestIds) {
+      if (writeReviewContainsRequestId(message.writeReview, requestId)) {
+        return index;
+      }
     }
   }
   return void 0;
@@ -404,6 +415,8 @@ var OBSIDIAN_WRITE_GUIDANCE = [
   "Wiki \u94FE\u63A5\u89C4\u8303\uFF1A",
   "- Wiki \u94FE\u63A5\u5E94\u8BE5\u6307\u5411\u53EF\u957F\u671F\u6C89\u6DC0\u7684\u6982\u5FF5\u3001\u4EBA\u7269\u3001\u9879\u76EE\u3001\u7406\u8BBA\u3001\u65B9\u6CD5\u6216\u4E3B\u9898\uFF0C\u4E0D\u8981\u94FE\u63A5\u666E\u901A\u8BCD\u3001\u6CDB\u8BCD\u3001\u4E00\u6B21\u6027\u8868\u8FBE\u3002",
   "- \u4E0D\u8981\u8FC7\u5EA6\u94FE\u63A5\u3002\u6BCF\u6BB5\u4F18\u5148\u94FE\u63A5 1-3 \u4E2A\u771F\u6B63\u6709\u4EF7\u503C\u7684\u6838\u5FC3\u6982\u5FF5\uFF1B\u540C\u4E00\u6982\u5FF5\u9996\u6B21\u51FA\u73B0\u94FE\u63A5\u5373\u53EF\u3002",
+  "- Wiki \u94FE\u63A5\u8981\u81EA\u7136\u7A7F\u63D2\u5728\u6B63\u6587\u8BED\u53E5\u91CC\uFF0C\u50CF\u6B63\u5E38\u5199\u4F5C\u4E2D\u7684\u6982\u5FF5\u63D0\u53CA\uFF0C\u4E0D\u8981\u5728\u53E5\u5C3E\u3001\u6BB5\u5C3E\u6216\u62EC\u53F7\u91CC\u673A\u68B0\u5806\u4E00\u4E32\u94FE\u63A5\u3002",
+  "- \u94FE\u63A5\u7684\u663E\u793A\u8BCD\u8981\u8D34\u5408\u5F53\u524D\u53E5\u5B50\u7684\u8BED\u4E49\u548C\u8BED\u6C14\uFF0C\u4F18\u5148\u8BA9 `[[wiki]]` \u6210\u4E3A\u53E5\u5B50\u7684\u4E00\u90E8\u5206\uFF0C\u800C\u4E0D\u662F\u751F\u786C\u63D2\u5165\u7684\u6807\u7B7E\u3002",
   "- \u53EA\u6709\u76EE\u6807\u7B14\u8BB0\u5DF2\u5B58\u5728\uFF0C\u6216\u4F60\u4F1A\u5728\u540C\u4E00\u6B21\u4EFB\u52A1\u4E2D\u521B\u5EFA\u5B83\uFF0C\u624D\u6DFB\u52A0\u65B0\u7684 `[[wiki]]`\u3002",
   "- \u5982\u679C\u5F15\u5165\u5168\u65B0\u7684 wiki \u94FE\u63A5\u6982\u5FF5\uFF0C\u5FC5\u987B\u5728\u540C\u4E00\u6B21\u5199\u5165\u6D41\u7A0B\u4E2D\u521B\u5EFA\u5BF9\u5E94 Markdown \u7B14\u8BB0\uFF0C\u8BA9\u5B83\u6210\u4E3A\u53EF\u7EE7\u7EED\u751F\u957F\u7684\u77E5\u8BC6\u79CD\u5B50\uFF0C\u800C\u4E0D\u662F\u7A7A\u58F3\u3002",
   "- \u9047\u5230\u53EF\u80FD\u91CD\u590D\u6216\u8FD1\u4E49\u7684\u6982\u5FF5\uFF0C\u4F18\u5148\u590D\u7528\u5DF2\u6709\u7B14\u8BB0\uFF1B\u4E0D\u8981\u5236\u9020\u540C\u4E49\u91CD\u590D\u7B14\u8BB0\u3002",
@@ -737,6 +750,29 @@ function buildChatWriteReviewOverview(review, visibleFileLimit = 3) {
     hiddenFiles: files.slice(safeLimit)
   };
 }
+function formatChatWriteReviewFileLabel(path) {
+  const normalizedPath = normalizeReviewPath(path).replace(/\/+$/, "");
+  if (!normalizedPath) {
+    return { title: "\u672A\u547D\u540D\u6587\u7AE0" };
+  }
+  const segments = normalizedPath.split("/").filter(Boolean);
+  const filename = segments[segments.length - 1] ?? normalizedPath;
+  const title = filename.replace(/\.md$/i, "") || filename || "\u672A\u547D\u540D\u6587\u7AE0";
+  if (segments.length <= 1) {
+    return { title };
+  }
+  const tailCount = Math.min(3, segments.length);
+  const tailPath = segments.slice(-tailCount).join("/");
+  const detail = segments.length > tailCount ? `.../${tailPath}` : tailPath;
+  return { title, detail: detail !== title ? detail : void 0 };
+}
+function formatChatWriteReviewLineDisplay(path) {
+  const label = formatChatWriteReviewFileLabel(path);
+  return {
+    title: label.title,
+    detail: label.detail
+  };
+}
 function extractChatWriteReviewDiffSections(diff) {
   return extractAppliedInlineReviewSections(diff);
 }
@@ -976,7 +1012,7 @@ function collectChatWriteReviewDiffFiles(review) {
   }
   finish();
   if (files.length > 0) {
-    return files;
+    return mergeChatWriteReviewDiffFilesByPath(files);
   }
   const fallbackSections = extractAppliedInlineReviewSections(diff);
   return [
@@ -988,6 +1024,52 @@ function collectChatWriteReviewDiffFiles(review) {
       diff
     }
   ];
+}
+function mergeChatWriteReviewDiffFilesByPath(files) {
+  const merged = [];
+  const indexByPath = /* @__PURE__ */ new Map();
+  for (const file of files) {
+    const existingIndex = indexByPath.get(file.path);
+    if (existingIndex === void 0) {
+      merged.push({ ...file });
+      indexByPath.set(file.path, merged.length - 1);
+      continue;
+    }
+    const existing = merged[existingIndex];
+    const existingStartedMissing = !Object.prototype.hasOwnProperty.call(existing, "oldPath");
+    const nextEndsMissing = file.kind === "deleted";
+    const mergedOldPath = existingStartedMissing ? void 0 : existing.oldPath;
+    const mergedNewPath = nextEndsMissing ? void 0 : Object.prototype.hasOwnProperty.call(file, "newPath") ? file.newPath : existing.newPath;
+    const mergedKind = deriveMergedChatWriteReviewFileKind(mergedOldPath, mergedNewPath, file.kind);
+    const nextPath = mergedNewPath || mergedOldPath || file.path || existing.path;
+    const next = {
+      path: nextPath,
+      kind: mergedKind,
+      additions: [...existing.additions, ...file.additions],
+      removals: [...existing.removals, ...file.removals],
+      diff: [existing.diff, file.diff].filter(Boolean).join("\n\n")
+    };
+    if (mergedOldPath) {
+      next.oldPath = mergedOldPath;
+    }
+    if (mergedNewPath) {
+      next.newPath = mergedNewPath;
+    }
+    merged[existingIndex] = next;
+  }
+  return merged;
+}
+function deriveMergedChatWriteReviewFileKind(oldPath, newPath, fallback) {
+  if (oldPath && !newPath) {
+    return "deleted";
+  }
+  if (!oldPath && newPath) {
+    return "created";
+  }
+  if (oldPath || newPath) {
+    return "modified";
+  }
+  return fallback;
 }
 function parseDiffTargetPaths(diff) {
   const targets = [];
@@ -1134,7 +1216,22 @@ function getInlineEditAction(actionId) {
 }
 function getInlineEditToolbarActions(actions = INLINE_EDIT_ACTIONS) {
   const toolbarIds = /* @__PURE__ */ new Set(["polish", "format", "html", "shorten", "wiki-link", "custom"]);
-  return actions.filter((action) => toolbarIds.has(action.id));
+  return [
+    ...actions.filter((action) => toolbarIds.has(action.id)).map((action) => ({
+      id: action.id,
+      label: action.label,
+      shortLabel: action.shortLabel,
+      description: action.description,
+      kind: "inline-edit"
+    })),
+    {
+      id: "attach-selection",
+      label: "\u53D1\u9001\u9009\u533A\u5230 Hermes",
+      shortLabel: "\u9009\u533A",
+      description: "\u628A\u5F53\u524D\u9009\u4E2D\u7684\u5185\u5BB9\u548C\u9644\u8FD1\u4E0A\u4E0B\u6587\u76F4\u63A5\u9644\u52A0\u5230 Hermes \u5BF9\u8BDD\u6846\u3002",
+      kind: "attach-selection"
+    }
+  ];
 }
 function parseSlashTrigger(line, cursorCh) {
   const beforeCursor = line.slice(0, cursorCh);
@@ -2071,8 +2168,11 @@ var InlineEditManager = class {
           text: action.shortLabel,
           attr: { type: "button", title: action.description }
         });
+        if (action.kind === "attach-selection") {
+          button.addClass("is-selection-send");
+        }
         button.addEventListener("mousedown", (event) => event.preventDefault());
-        button.addEventListener("click", () => void this.runSelectionAction(action.id));
+        button.addEventListener("click", () => void this.handleToolbarAction(action));
       }
     }
     const rect = context.rect;
@@ -2081,14 +2181,48 @@ var InlineEditManager = class {
       return;
     }
     const toolbarWidth = this.selectionToolbarEl.offsetWidth || 420;
-    const left = Math.min(window.innerWidth - toolbarWidth - 12, Math.max(12, rect.left - 48));
-    this.selectionToolbarEl.style.left = `${Math.max(12, left)}px`;
-    this.selectionToolbarEl.style.top = `${Math.max(12, rect.top - 52)}px`;
+    const toolbarHeight = this.selectionToolbarEl.offsetHeight || 46;
+    const centerX = rect.left + (rect.right - rect.left) / 2;
+    const left = Math.min(window.innerWidth - toolbarWidth - 16, Math.max(16, centerX - toolbarWidth / 2));
+    const preferredTop = rect.top - toolbarHeight - 14;
+    const fallbackTop = Math.min(window.innerHeight - toolbarHeight - 16, rect.bottom + 12);
+    const top = preferredTop >= 16 ? preferredTop : Math.max(16, fallbackTop);
+    this.selectionToolbarEl.style.left = `${Math.max(16, left)}px`;
+    this.selectionToolbarEl.style.top = `${top}px`;
     this.selectionToolbarEl.addClass("is-visible");
   }
   hideSelectionToolbar() {
     this.selectionToolbarEl?.remove();
     this.selectionToolbarEl = null;
+  }
+  async handleToolbarAction(action) {
+    if (action.kind === "attach-selection") {
+      await this.attachCurrentSelectionToChat();
+      return;
+    }
+    await this.runSelectionAction(action.id);
+  }
+  async attachCurrentSelectionToChat() {
+    const selectionContext = this.getSelectionContext();
+    if (!selectionContext) {
+      return;
+    }
+    this.hideSelectionToolbar();
+    if (!this.options.attachSelectionToChat) {
+      new import_obsidian.Notice("\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684 Hermes \u5BF9\u8BDD\u6846\u3002");
+      return;
+    }
+    try {
+      await this.options.attachSelectionToChat({
+        selectedText: selectionContext.text,
+        noteContext: selectionContext.noteContext,
+        noteTitle: selectionContext.file.basename,
+        filePath: selectionContext.file.path
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      new import_obsidian.Notice(`\u9644\u52A0\u9009\u533A\u5931\u8D25\uFF1A${message}`);
+    }
   }
   getSelectionContext() {
     const markdownView = this.options.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
@@ -2938,6 +3072,8 @@ var DEFAULT_SYSTEM_PROMPT = [
   "Wiki \u94FE\u63A5\u89C4\u8303\uFF1A",
   "- Wiki \u94FE\u63A5\u5E94\u8BE5\u6307\u5411\u53EF\u957F\u671F\u6C89\u6DC0\u7684\u6982\u5FF5\u3001\u4EBA\u7269\u3001\u9879\u76EE\u3001\u7406\u8BBA\u3001\u65B9\u6CD5\u6216\u4E3B\u9898\uFF0C\u4E0D\u8981\u94FE\u63A5\u666E\u901A\u8BCD\u3001\u6CDB\u8BCD\u3001\u4E00\u6B21\u6027\u8868\u8FBE\u3002",
   "- \u4E0D\u8981\u8FC7\u5EA6\u94FE\u63A5\u3002\u6BCF\u6BB5\u4F18\u5148\u94FE\u63A5 1-3 \u4E2A\u771F\u6B63\u6709\u4EF7\u503C\u7684\u6838\u5FC3\u6982\u5FF5\uFF1B\u540C\u4E00\u6982\u5FF5\u9996\u6B21\u51FA\u73B0\u94FE\u63A5\u5373\u53EF\u3002",
+  "- Wiki \u94FE\u63A5\u8981\u81EA\u7136\u7A7F\u63D2\u5728\u6B63\u6587\u8BED\u53E5\u91CC\uFF0C\u50CF\u6B63\u5E38\u5199\u4F5C\u4E2D\u7684\u6982\u5FF5\u63D0\u53CA\uFF0C\u4E0D\u8981\u5728\u53E5\u5C3E\u3001\u6BB5\u5C3E\u6216\u62EC\u53F7\u91CC\u673A\u68B0\u5806\u4E00\u4E32\u94FE\u63A5\u3002",
+  "- \u94FE\u63A5\u7684\u663E\u793A\u8BCD\u8981\u8D34\u5408\u5F53\u524D\u53E5\u5B50\u7684\u8BED\u4E49\u548C\u8BED\u6C14\uFF0C\u4F18\u5148\u8BA9 `[[wiki]]` \u6210\u4E3A\u53E5\u5B50\u7684\u4E00\u90E8\u5206\uFF0C\u800C\u4E0D\u662F\u751F\u786C\u63D2\u5165\u7684\u6807\u7B7E\u3002",
   "- \u53EA\u6709\u76EE\u6807\u7B14\u8BB0\u5DF2\u5B58\u5728\uFF0C\u6216\u4F60\u4F1A\u5728\u540C\u4E00\u6B21\u4EFB\u52A1\u4E2D\u521B\u5EFA\u5B83\uFF0C\u624D\u6DFB\u52A0\u65B0\u7684 `[[wiki]]`\u3002",
   "- \u5982\u679C\u5F15\u5165\u5168\u65B0\u7684 wiki \u94FE\u63A5\u6982\u5FF5\uFF0C\u5FC5\u987B\u5728\u540C\u4E00\u6B21\u5199\u5165\u6D41\u7A0B\u4E2D\u521B\u5EFA\u5BF9\u5E94 Markdown \u7B14\u8BB0\uFF0C\u8BA9\u5B83\u6210\u4E3A\u53EF\u7EE7\u7EED\u751F\u957F\u7684\u77E5\u8BC6\u79CD\u5B50\uFF0C\u800C\u4E0D\u662F\u7A7A\u58F3\u3002",
   "- \u9047\u5230\u53EF\u80FD\u91CD\u590D\u6216\u8FD1\u4E49\u7684\u6982\u5FF5\uFF0C\u4F18\u5148\u590D\u7528\u5DF2\u6709\u7B14\u8BB0\uFF1B\u4E0D\u8981\u5236\u9020\u540C\u4E49\u91CD\u590D\u7B14\u8BB0\u3002",
@@ -2998,7 +3134,25 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
         reasoningEffort: this.settings.reasoningEffort,
         systemPrompt: this.settings.systemPrompt
       }),
-      run: (input) => runInlineHermesBridge(this, input)
+      run: (input) => runInlineHermesBridge(this, input),
+      attachSelectionToChat: async ({ selectedText, noteContext, noteTitle, filePath }) => {
+        const sidebar = await this.activateView();
+        sidebar.attachSelectionContext({
+          label: "\u9009\u533A",
+          content: [
+            noteTitle ? `Title: ${noteTitle}` : "",
+            filePath ? `Path: ${filePath}` : "",
+            "Selected text:",
+            "```text",
+            selectedText,
+            "```",
+            noteContext ? "Nearby note context:" : "",
+            noteContext ? "```text" : "",
+            noteContext,
+            noteContext ? "```" : ""
+          ].filter(Boolean).join("\n")
+        });
+      }
     });
     this.registerEditorExtension(createHermesAppliedInlineWriteReviewExtension());
     this.registerView(VIEW_TYPE_HERMES_SIDEBAR, (leaf) => new HermesSidebarView(leaf, this));
@@ -3081,6 +3235,14 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
         this.scheduleRefreshSidebarViews();
       }
     });
+    this.registerDomEvent(
+      document,
+      "click",
+      (event) => {
+        void this.handleDocumentInternalLinkClick(event);
+      },
+      true
+    );
   }
   async onunload() {
     this.inlineEditManager?.destroy();
@@ -3101,6 +3263,52 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
   }
   getActiveMarkdownView() {
     return this.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView) ?? null;
+  }
+  findMarkdownLeafContainingElement(target) {
+    if (!target) {
+      return null;
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (!(leaf.view instanceof import_obsidian2.MarkdownView)) {
+        continue;
+      }
+      if (leaf.view.containerEl.contains(target)) {
+        return leaf;
+      }
+    }
+    return null;
+  }
+  async handleDocumentInternalLinkClick(event) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const link = target?.closest(".internal-link");
+    if (!link) {
+      return;
+    }
+    if (this.isElementInsideHermesSidebar(link)) {
+      return;
+    }
+    const markdownLeaf = this.findMarkdownLeafContainingElement(link);
+    if (!markdownLeaf || !(markdownLeaf.view instanceof import_obsidian2.MarkdownView)) {
+      return;
+    }
+    const linktext = link.getAttribute("data-href")?.trim() || link.getAttribute("href")?.trim() || "";
+    const sourcePath = markdownLeaf.view.file?.path ?? "";
+    if (!linktext || !sourcePath) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    await this.openWikiLinkInSplit(linktext, sourcePath, markdownLeaf);
+  }
+  isElementInsideHermesSidebar(target) {
+    return this.app.workspace.getLeavesOfType(VIEW_TYPE_HERMES_SIDEBAR).some((leaf) => {
+      const sidebarView = leaf.view;
+      return sidebarView.containerEl.contains(target);
+    });
   }
   getCurrentContextFile() {
     const activeFile = this.app.workspace.getActiveFile();
@@ -3403,6 +3611,39 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
     });
     await nextAnimationFrame();
   }
+  async openWikiLinkInSplit(linktext, sourcePath, anchorLeaf) {
+    const parsed = (0, import_obsidian2.parseLinktext)(linktext);
+    const targetFile = this.app.metadataCache.getFirstLinkpathDest(parsed.path, sourcePath);
+    if (!targetFile) {
+      new import_obsidian2.Notice(`\u6CA1\u6709\u627E\u5230\u7B14\u8BB0\uFF1A${parsed.path}`);
+      return;
+    }
+    const baseLeaf = anchorLeaf ?? this.getBestMarkdownLeafForSplit(sourcePath);
+    if (!baseLeaf) {
+      return;
+    }
+    const splitLeaf = this.app.workspace.createLeafBySplit(baseLeaf, "vertical");
+    await splitLeaf.openFile(targetFile, {
+      active: true,
+      state: { mode: "preview" },
+      eState: parsed.subpath ? { subpath: parsed.subpath } : void 0
+    });
+    this.app.workspace.setActiveLeaf(splitLeaf, { focus: true });
+    await this.app.workspace.revealLeaf(splitLeaf);
+  }
+  getBestMarkdownLeafForSplit(sourcePath) {
+    const activeLeaf = this.app.workspace.activeLeaf;
+    if (activeLeaf?.view instanceof import_obsidian2.MarkdownView) {
+      return activeLeaf;
+    }
+    if (sourcePath) {
+      const sourceLeaf = this.app.workspace.getLeavesOfType("markdown").find((leaf) => leaf.view instanceof import_obsidian2.MarkdownView && leaf.view.file?.path === sourcePath);
+      if (sourceLeaf) {
+        return sourceLeaf;
+      }
+    }
+    return this.app.workspace.getLeavesOfType("markdown")[0] ?? null;
+  }
   async activateView() {
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_HERMES_SIDEBAR)[0];
     if (!leaf) {
@@ -3447,6 +3688,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.pendingWriteReviewMessages = [];
     this.pendingThinkingScrollFrame = null;
     this.pendingThinkingScrollTimeouts = [];
+    this.lastStableMessagesScrollTop = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -3508,6 +3750,14 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.render();
     new import_obsidian2.Notice(`\u5DF2\u6DFB\u52A0${context.label}\u3002`);
   }
+  attachSelectionContext(context) {
+    this.pendingContexts.push(context);
+    this.plugin.clearSelectionSnapshot(false);
+    this.statusText = "\u5DF2\u6DFB\u52A0\u9009\u533A";
+    this.render(false);
+    this.focusComposerWithoutScroll();
+    new import_obsidian2.Notice("\u5DF2\u6DFB\u52A0\u5F53\u524D\u9009\u533A\u3002");
+  }
   async attachCurrentArticle() {
     const context = await this.plugin.getCurrentArticleContext();
     if (!context) {
@@ -3524,10 +3774,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       new import_obsidian2.Notice("\u8BF7\u5148\u5728\u5F53\u524D\u6587\u7AE0\u91CC\u9009\u4E2D\u4E00\u6BB5\u6587\u5B57\u3002");
       return;
     }
-    this.pendingContexts.push(context);
-    this.plugin.clearSelectionSnapshot(false);
-    this.statusText = "\u5DF2\u6DFB\u52A0\u9009\u533A";
-    this.render(false);
+    this.attachSelectionContext(context);
   }
   focusComposerWithoutScroll() {
     if (!this.inputEl) {
@@ -3709,6 +3956,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
         this.suppressNextMessagesScroll = false;
         return;
       }
+      this.lastStableMessagesScrollTop = this.messagesEl?.scrollTop ?? null;
       this.shouldAutoStickToBottom = shouldStickToBottom({
         scrollTop: this.messagesEl?.scrollTop ?? 0,
         clientHeight: this.messagesEl?.clientHeight ?? 0,
@@ -5401,7 +5649,11 @@ ${message}`
       this.isSending = false;
       this.flushPendingWriteReviewMessages();
       this.settleInlineActivityTimeline();
-      this.scheduleMessagesToBottom();
+      if (this.shouldAutoStickToBottom) {
+        this.scheduleMessagesToBottom();
+      } else if (typeof this.lastStableMessagesScrollTop === "number") {
+        this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+      }
     }
   }
   stopActiveRun() {
@@ -5425,9 +5677,7 @@ ${message}`
     }
     const pending = [...this.pendingWriteReviewMessages];
     this.pendingWriteReviewMessages = [];
-    for (const review of pending) {
-      this.appendAppliedWriteReviewMessage(review);
-    }
+    this.appendAppliedWriteReviewMessage(this.mergeAppliedWriteReviewMessages(pending));
   }
   appendAppliedWriteReviewMessage(review) {
     const session = this.plugin.getActiveSession();
@@ -5439,12 +5689,43 @@ ${message}`
       pending: false,
       writeReview: review
     };
-    const insertIndex = getAppendIndexAfterLatestTurnAssistant(session.messages, this.activeTurnUserMessageId) ?? getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
+    review.messageId = message.id;
+    const insertIndex = getAppendIndexAfterTurnMessages(session.messages, this.activeTurnUserMessageId);
     session.messages.splice(insertIndex, 0, message);
     this.activeStreamingMessageIndex = adjustIndexAfterInsertion(this.activeStreamingMessageIndex, insertIndex);
     this.persistActiveSession(false);
+    const shouldRestoreScroll = !this.shouldAutoStickToBottom && typeof this.lastStableMessagesScrollTop === "number";
     this.render(false);
+    if (shouldRestoreScroll && typeof this.lastStableMessagesScrollTop === "number") {
+      this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+      return;
+    }
     this.scheduleMessagesToBottom();
+  }
+  mergeAppliedWriteReviewMessages(reviews) {
+    const normalized = reviews.filter((review) => review.requestId);
+    if (normalized.length <= 1) {
+      return normalized[0] ?? reviews[0];
+    }
+    const diffBlocks = normalized.flatMap(
+      (review) => splitChatWriteReviewDiffFiles(review).map((file) => file.diff.trim()).filter(Boolean)
+    );
+    const filePath = normalized.flatMap((review) => summarizeChatWriteReviewFiles(review).map((file) => file.path)).filter(Boolean).filter((path, index, source) => source.indexOf(path) === index).join(", ");
+    const snapshots = normalized.flatMap((review) => review.snapshots ?? []).filter((snapshot, index, source) => source.findIndex((item) => item.path === snapshot.path) === index);
+    const pendingExists = normalized.some((review) => (review.status ?? "pending") === "pending");
+    const hasError = normalized.some((review) => review.status === "error");
+    const hasReverted = normalized.some((review) => review.status === "reverted");
+    const allAccepted = normalized.every((review) => review.status === "accepted");
+    return {
+      requestId: normalized[0].requestId,
+      title: normalized.length > 1 ? `\u5DF2\u7F16\u8F91 ${summarizeChatWriteReviewFiles({ filePath, diff: diffBlocks.join("\n\n") }).length} \u4E2A\u6587\u4EF6` : normalized[0]?.title,
+      meta: normalized.length > 1 ? "Diff \u5DF2\u5728\u539F\u6587\u4E2D\u663E\u793A" : normalized[0]?.meta,
+      filePath: filePath || normalized[0]?.filePath,
+      diff: diffBlocks.join("\n\n"),
+      snapshots,
+      status: pendingExists ? "pending" : hasError ? "error" : hasReverted ? "reverted" : allAccepted ? "accepted" : "pending",
+      members: normalized
+    };
   }
   renderAppliedWriteReviewMessage(container, review) {
     const status = review.status ?? "pending";
@@ -5496,12 +5777,19 @@ ${message}`
   renderAppliedWriteReviewFileRow(container, file, review) {
     const diffFile = splitChatWriteReviewDiffFiles(review).find((item) => item.path === file.path);
     const sections = extractChatWriteReviewDiffSections(diffFile?.diff || "");
+    const label = formatChatWriteReviewFileLabel(file.path);
     const row = container.createEl("details", {
       cls: "hermes-write-review-file-item"
     });
     const summary = row.createEl("summary", { cls: "hermes-write-review-file-row" });
+    const lineLabel = formatChatWriteReviewLineDisplay(file.path);
     summary.createSpan({ cls: `hermes-write-review-file-kind is-${file.kind}`, text: getAppliedReviewFileKindLabel(file.kind) });
-    summary.createSpan({ cls: "hermes-write-review-file-path", text: file.path });
+    summary.setAttribute("title", file.path);
+    const fileLabel = summary.createDiv({ cls: "hermes-write-review-file-label" });
+    fileLabel.createSpan({ cls: "hermes-write-review-file-title", text: lineLabel.title });
+    if (lineLabel.detail) {
+      fileLabel.createSpan({ cls: "hermes-write-review-file-path", text: lineLabel.detail });
+    }
     const stats = summary.createDiv({ cls: "hermes-write-review-file-stats" });
     stats.createSpan({ cls: "hermes-write-review-additions", text: `+${file.additions.length}` });
     stats.createSpan({ cls: "hermes-write-review-removals", text: `-${file.removals.length}` });
@@ -5562,23 +5850,28 @@ ${message}`
     locate.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      void this.locateAppliedWriteReview(review.requestId);
+      void this.locateAppliedWriteReview(review.requestId, review.messageId);
     });
     revert.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      void this.revertAppliedWriteReview(review.requestId);
+      void this.revertAppliedWriteReview(review.requestId, review.messageId);
     });
     accept.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.acceptAppliedWriteReview(review.requestId);
+      this.acceptAppliedWriteReview(review.requestId, review.members, review.messageId);
     });
   }
-  acceptAppliedWriteReview(requestId) {
-    const review = this.findAppliedWriteReview(requestId);
+  acceptAppliedWriteReview(requestId, members, messageId) {
+    const targetRequestIds = this.collectAppliedWriteReviewRequestIds(requestId, members);
+    const review = this.findAppliedWriteReviewByAnyRequestId(targetRequestIds, messageId);
     if (!review) {
-      if (this.updatePendingAppliedWriteReview(requestId, (current) => ({ ...current, status: "accepted" }))) {
+      if (this.updatePendingAppliedWriteReviewByAnyRequestId(targetRequestIds, (current) => ({
+        ...current,
+        status: "accepted",
+        members: current.members?.map((member) => ({ ...member, status: "accepted" }))
+      }), messageId)) {
         this.statusText = "\u5DF2\u63A5\u53D7\u8FD9\u6B21\u5199\u5165";
         this.scheduleAppliedInlineWriteReviewClear(1e3);
         new import_obsidian2.Notice("Hermes \u5DF2\u63A5\u53D7\u8FD9\u6B21\u5199\u5165");
@@ -5588,33 +5881,42 @@ ${message}`
     if (review.status !== "pending") {
       return;
     }
-    this.updateAppliedWriteReview(requestId, (current) => ({ ...current, status: "accepted" }));
+    this.updateAppliedWriteReviewByAnyRequestId(targetRequestIds, (current) => ({
+      ...current,
+      status: "accepted",
+      members: current.members?.map((member) => ({ ...member, status: "accepted" }))
+    }), messageId);
     this.statusText = "\u5DF2\u63A5\u53D7\u8FD9\u6B21\u5199\u5165";
     const active = this.activeAppliedInlineWriteReview;
-    if (active?.requestId === requestId) {
+    if (active && this.activeWriteReviewMatches(active, targetRequestIds, messageId)) {
       active.status = "accepted";
       this.syncAppliedInlineWriteReviewDecorations();
       this.scheduleAppliedInlineWriteReviewClear(1e3);
     }
     new import_obsidian2.Notice("Hermes \u5DF2\u63A5\u53D7\u8FD9\u6B21\u5199\u5165");
   }
-  async locateAppliedWriteReview(requestId) {
-    const review = this.findAppliedWriteReview(requestId) ?? this.pendingWriteReviewMessages.find((item) => item.requestId === requestId);
+  async locateAppliedWriteReview(requestId, messageId) {
+    const review = this.findAppliedWriteReviewByAnyRequestId(/* @__PURE__ */ new Set([requestId]), messageId) ?? this.findPendingAppliedWriteReview(requestId, messageId);
     if (!review) {
       this.statusText = "\u65E0\u6CD5\u5B9A\u4F4D\u8FD9\u6B21\u5199\u5165\u5BA1\u9605";
       return;
     }
     await this.showAppliedInlineWriteReview(review);
   }
-  async revertAppliedWriteReview(requestId) {
-    const review = this.findAppliedWriteReview(requestId);
+  async revertAppliedWriteReview(requestId, messageId) {
+    const pending = this.findPendingAppliedWriteReview(requestId, messageId);
+    const targetRequestIds = this.collectAppliedWriteReviewRequestIds(requestId, pending?.members);
+    const review = this.findAppliedWriteReviewByAnyRequestId(targetRequestIds, messageId);
     if (!review) {
-      const pending = this.pendingWriteReviewMessages.find((item) => item.requestId === requestId);
       if (!pending || pending.status === "reverted") {
         return;
       }
-      this.updatePendingAppliedWriteReview(requestId, (current) => ({ ...current, status: "reverted" }));
-      for (const snapshot of pending.snapshots ?? []) {
+      this.updatePendingAppliedWriteReviewByAnyRequestId(targetRequestIds, (current) => ({
+        ...current,
+        status: "reverted",
+        members: current.members?.map((member) => ({ ...member, status: "reverted" }))
+      }), messageId);
+      for (const snapshot of this.collectAppliedWriteReviewSnapshots(pending)) {
         await this.restoreWriteSnapshot(snapshot);
       }
       this.statusText = "\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u5199\u5165";
@@ -5625,25 +5927,29 @@ ${message}`
       return;
     }
     try {
-      this.updateAppliedWriteReview(requestId, (current) => ({ ...current, status: "reverted" }));
+      this.updateAppliedWriteReviewByAnyRequestId(targetRequestIds, (current) => ({
+        ...current,
+        status: "reverted",
+        members: current.members?.map((member) => ({ ...member, status: "reverted" }))
+      }), messageId);
       const active = this.activeAppliedInlineWriteReview;
-      if (active?.requestId === requestId) {
+      if (active && this.activeWriteReviewMatches(active, targetRequestIds, messageId)) {
         active.status = "reverted";
         this.syncAppliedInlineWriteReviewDecorations();
       }
-      for (const snapshot of review.snapshots ?? []) {
+      for (const snapshot of this.collectAppliedWriteReviewSnapshots(review)) {
         await this.restoreWriteSnapshot(snapshot);
       }
       this.statusText = "\u5DF2\u62D2\u7EDD\u8FD9\u6B21\u5199\u5165";
       new import_obsidian2.Notice("Hermes \u5DF2\u62D2\u7EDD\u8FD9\u6B21\u5199\u5165");
-      if (this.activeAppliedInlineWriteReview?.requestId === requestId) {
+      if (this.activeAppliedInlineWriteReview && this.activeWriteReviewMatches(this.activeAppliedInlineWriteReview, targetRequestIds, messageId)) {
         this.scheduleAppliedInlineWriteReviewClear(1200);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.updateAppliedWriteReview(requestId, (current) => ({ ...current, status: "error" }));
+      this.updateAppliedWriteReviewByAnyRequestId(targetRequestIds, (current) => ({ ...current, status: "error" }), messageId);
       const active = this.activeAppliedInlineWriteReview;
-      if (active?.requestId === requestId) {
+      if (active && this.activeWriteReviewMatches(active, targetRequestIds, messageId)) {
         active.status = "error";
         this.syncAppliedInlineWriteReviewDecorations();
       }
@@ -5687,6 +5993,7 @@ ${message}`
     const anchorLine = editorView.state.doc.line(anchorLineNumber);
     this.activeAppliedInlineWriteReview = {
       requestId: review.requestId,
+      messageId: review.messageId,
       review,
       previews,
       sourcePath,
@@ -5724,9 +6031,9 @@ ${message}`
         ),
         app: this.app,
         component: this.plugin,
-        onAccept: (requestId) => this.acceptAppliedWriteReview(requestId),
-        onRevert: (requestId) => void this.revertAppliedWriteReview(requestId),
-        onLocate: (requestId) => void this.locateAppliedWriteReview(requestId)
+        onAccept: (requestId, messageId) => this.acceptAppliedWriteReview(requestId, void 0, messageId),
+        onRevert: (requestId, messageId) => void this.revertAppliedWriteReview(requestId, messageId),
+        onLocate: (requestId, messageId) => void this.locateAppliedWriteReview(requestId, messageId)
       })
     });
   }
@@ -5757,7 +6064,7 @@ ${message}`
       window.clearTimeout(active.clearTimer);
     }
     active.clearTimer = window.setTimeout(() => {
-      if (this.activeAppliedInlineWriteReview?.requestId === active.requestId) {
+      if (this.activeAppliedInlineWriteReview?.requestId === active.requestId && this.activeAppliedInlineWriteReview?.messageId === active.messageId) {
         this.clearAppliedInlineWriteReview();
       }
     }, delayMs);
@@ -5780,29 +6087,61 @@ ${message}`
     }
     await this.app.vault.create(vaultRelativePath, snapshot.content);
   }
-  findAppliedWriteReview(requestId) {
-    for (const message of this.plugin.getActiveSession().messages) {
-      if (message.kind === "write-review" && message.writeReview?.requestId === requestId) {
-        return message.writeReview;
-      }
-    }
-    return null;
-  }
-  updateAppliedWriteReview(requestId, update) {
+  findAppliedWriteReview(requestId, messageId) {
     const session = this.plugin.getActiveSession();
-    let targetMessage;
-    for (const message of session.messages) {
-      if (message.kind !== "write-review" || message.writeReview?.requestId !== requestId) {
-        continue;
-      }
-      message.writeReview = update(message.writeReview);
-      targetMessage = message;
-      break;
+    const index = findMatchingWriteReviewMessageIndex(session.messages, /* @__PURE__ */ new Set([requestId]), messageId);
+    if (index === void 0) {
+      return null;
     }
+    const message = session.messages[index];
+    if (!message.writeReview) {
+      return null;
+    }
+    message.writeReview.messageId = message.id;
+    return message.writeReview;
+  }
+  findAppliedWriteReviewByAnyRequestId(requestIds, messageId) {
+    const session = this.plugin.getActiveSession();
+    const index = findMatchingWriteReviewMessageIndex(session.messages, requestIds, messageId);
+    if (index === void 0) {
+      return null;
+    }
+    const message = session.messages[index];
+    if (!message.writeReview) {
+      return null;
+    }
+    message.writeReview.messageId = message.id;
+    return message.writeReview;
+  }
+  updateAppliedWriteReviewAtIndex(index, update) {
+    const session = this.plugin.getActiveSession();
+    const targetMessage = session.messages[index];
+    if (targetMessage?.kind !== "write-review" || !targetMessage.writeReview) {
+      return;
+    }
+    targetMessage.writeReview = update({
+      ...targetMessage.writeReview,
+      messageId: targetMessage.id
+    });
     if (targetMessage) {
       this.persistActiveSession(false);
       this.refreshWriteReviewMessage(targetMessage);
     }
+  }
+  updateAppliedWriteReviewByAnyRequestId(requestIds, update, messageId) {
+    const session = this.plugin.getActiveSession();
+    const index = findMatchingWriteReviewMessageIndex(session.messages, requestIds, messageId);
+    if (index === void 0) {
+      return;
+    }
+    const target = session.messages[index];
+    if (!target.id || !target.writeReview) {
+      return;
+    }
+    this.updateAppliedWriteReviewAtIndex(index, (review) => ({
+      ...update({ ...review, messageId: target.id }),
+      messageId: target.id
+    }));
   }
   updatePendingAppliedWriteReview(requestId, update) {
     const pendingIndex = this.pendingWriteReviewMessages.findIndex((review) => review.requestId === requestId);
@@ -5816,6 +6155,65 @@ ${message}`
       this.syncAppliedInlineWriteReviewDecorations();
     }
     return true;
+  }
+  updatePendingAppliedWriteReviewByAnyRequestId(requestIds, update, messageId) {
+    if (messageId) {
+      const pendingIndex = this.pendingWriteReviewMessages.findIndex((review) => review.messageId === messageId);
+      if (pendingIndex >= 0) {
+        this.pendingWriteReviewMessages[pendingIndex] = update(this.pendingWriteReviewMessages[pendingIndex]);
+        return true;
+      }
+    }
+    for (const requestId of requestIds) {
+      if (this.updatePendingAppliedWriteReview(requestId, update)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  findPendingAppliedWriteReview(requestId, messageId) {
+    if (messageId) {
+      const byMessageId = this.pendingWriteReviewMessages.find((review) => review.messageId === messageId);
+      if (byMessageId) {
+        return byMessageId;
+      }
+    }
+    return this.pendingWriteReviewMessages.find((review) => this.reviewContainsRequestId(review, requestId));
+  }
+  collectAppliedWriteReviewRequestIds(requestId, members) {
+    const ids = /* @__PURE__ */ new Set();
+    if (requestId) {
+      ids.add(requestId);
+    }
+    for (const member of members ?? []) {
+      if (member.requestId) {
+        ids.add(member.requestId);
+      }
+    }
+    return ids;
+  }
+  reviewContainsRequestId(review, requestId) {
+    return writeReviewContainsRequestId(review, requestId);
+  }
+  activeWriteReviewMatches(active, requestIds, messageId) {
+    if (messageId && active.messageId) {
+      return active.messageId === messageId;
+    }
+    if (requestIds.has(active.requestId)) {
+      return true;
+    }
+    return [...requestIds].some((requestId) => writeReviewContainsRequestId(active.review, requestId));
+  }
+  collectAppliedWriteReviewSnapshots(review) {
+    const snapshots = [...review.snapshots ?? [], ...(review.members ?? []).flatMap((member) => member.snapshots ?? [])];
+    const seen = /* @__PURE__ */ new Set();
+    return snapshots.filter((snapshot) => {
+      if (!snapshot.path || seen.has(snapshot.path)) {
+        return false;
+      }
+      seen.add(snapshot.path);
+      return true;
+    });
   }
   refreshWriteReviewMessage(target) {
     const row = this.findRenderedMessageRow(target);
@@ -6022,10 +6420,15 @@ var HermesAppliedInlineWriteReviewWidget = class _HermesAppliedInlineWriteReview
   }
   renderFileDiffPreviews(root, files) {
     for (const file of files) {
+      const label = formatChatWriteReviewFileLabel(file.path);
       const fileEl = root.createDiv({ cls: `hermes-chat-inline-review-file is-${file.kind}` });
       const header = fileEl.createDiv({ cls: "hermes-chat-inline-review-file-header" });
       header.createSpan({ cls: `hermes-chat-inline-review-file-kind is-${file.kind}`, text: getAppliedReviewFileKindLabel(file.kind) });
-      header.createSpan({ cls: "hermes-chat-inline-review-file-path", text: file.path });
+      const labelEl = header.createDiv({ cls: "hermes-chat-inline-review-file-label" });
+      labelEl.createSpan({ cls: "hermes-chat-inline-review-file-title", text: label.title });
+      if (label.detail) {
+        labelEl.createSpan({ cls: "hermes-chat-inline-review-file-path", text: label.detail });
+      }
       header.createSpan({
         cls: "hermes-chat-inline-review-file-stats",
         text: `+${file.additions.length} / -${file.removals.length}`

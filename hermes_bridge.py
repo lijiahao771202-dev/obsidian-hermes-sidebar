@@ -8,15 +8,14 @@ import sys
 import copy
 import asyncio
 import difflib
-import itertools
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 DEFAULT_HERMES_AGENT_ROOT = "/Users/lijiahao/.hermes/hermes-agent"
 DEFAULT_HERMES_HOME = str(Path.home() / ".hermes")
 WRITE_REVIEW_DIFF_MAX_CHARACTERS = 40000
-_WRITE_REVIEW_REQUEST_IDS = itertools.count(1)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -398,7 +397,7 @@ def install_write_review_handlers(control_channel: BridgeControlChannel | None) 
             snapshots = snapshot_write_review_files(review)
             result = __original(args, **kwargs)
             if review is not None and not result_has_error(result):
-                request_id = f"write-review-{next(_WRITE_REVIEW_REQUEST_IDS)}"
+                request_id = f"write-review-{uuid.uuid4().hex}"
                 emit(
                     {
                         "type": "write_review",

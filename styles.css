@@ -1802,15 +1802,35 @@
 	color: color-mix(in srgb, var(--text-error) 76%, var(--text-normal));
 }
 
-.hermes-write-review-file-path {
+.hermes-write-review-file-label,
+.hermes-chat-inline-review-file-label {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.hermes-write-review-file-title,
+.hermes-chat-inline-review-file-title {
 	min-width: 0;
 	overflow: hidden;
 	color: var(--text-normal);
-	font-size: 12px;
-	font-weight: 520;
-	line-height: 1.35;
+	font-size: 12.5px;
+	font-weight: 720;
+	line-height: 1.3;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.hermes-write-review-file-path {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--text-muted);
+	font-size: 10px;
+	font-weight: 500;
+	line-height: 1.25;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	opacity: 0.82;
 }
 
 .hermes-write-review-file-stats {
@@ -2174,9 +2194,10 @@
 .hermes-chat-inline-review-file-path {
 	min-width: 0;
 	overflow: hidden;
-	color: var(--text-normal);
-	font-size: 11.5px;
-	font-weight: 680;
+	color: var(--text-muted);
+	font-size: 10.5px;
+	font-weight: 500;
+	line-height: 1.35;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
@@ -2726,18 +2747,23 @@
 	z-index: 1000;
 	display: none;
 	align-items: center;
-	gap: 4px;
-	max-width: min(calc(100vw - 24px), 460px);
-	padding: 5px;
-	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 74%, transparent);
-	border-radius: 8px;
-	background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+	gap: 6px;
+	max-width: min(calc(100vw - 32px), 560px);
+	padding: 7px 8px;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 76%, transparent);
+	border-radius: 12px;
+	background: color-mix(in srgb, var(--background-primary) 92%, transparent);
 	box-shadow:
-		0 16px 42px rgba(15, 23, 42, 0.14),
-		0 2px 8px rgba(15, 23, 42, 0.08);
-	backdrop-filter: blur(18px) saturate(1.35);
+		0 18px 46px rgba(15, 23, 42, 0.12),
+		0 3px 10px rgba(15, 23, 42, 0.06);
+	backdrop-filter: blur(20px) saturate(1.3);
 	overflow-x: auto;
+	scrollbar-width: none;
 	white-space: nowrap;
+}
+
+.hermes-inline-toolbar::-webkit-scrollbar {
+	display: none;
 }
 
 .hermes-inline-toolbar.is-visible {
@@ -2748,36 +2774,63 @@
 	content: "Hermes AI";
 	display: inline-flex;
 	align-items: center;
-	min-height: 28px;
-	padding: 0 9px;
-	border-right: 1px solid color-mix(in srgb, var(--background-modifier-border) 72%, transparent);
+	align-self: stretch;
+	padding: 0 12px 0 6px;
+	border-right: 1px solid color-mix(in srgb, var(--background-modifier-border) 68%, transparent);
 	color: var(--text-muted);
-	font-size: 11px;
+	font-size: 10.5px;
 	font-weight: 760;
 	line-height: 1;
+	letter-spacing: 0.02em;
 }
 
 .hermes-inline-toolbar-button {
-	border: 0;
-	border-radius: 7px;
-	background: transparent;
+	border: 1px solid color-mix(in srgb, var(--background-modifier-border) 68%, transparent);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--background-primary) 96%, var(--background-secondary) 4%);
 	color: var(--text-normal);
 	cursor: pointer;
-	font-size: 12px;
-	font-weight: 680;
+	font-size: 11.5px;
+	font-weight: 720;
 	line-height: 1;
-	min-height: 28px;
-	padding: 0 11px;
+	min-height: 34px;
+	padding: 0 14px;
+	box-shadow:
+		0 1px 0 color-mix(in srgb, white 42%, transparent) inset,
+		0 1px 2px rgba(15, 23, 42, 0.05);
 	transition:
 		background-color 140ms ease,
+		border-color 140ms ease,
+		box-shadow 140ms ease,
 		color 140ms ease,
 		transform 140ms ease;
 }
 
+.hermes-inline-toolbar-button.is-selection-send {
+	border-color: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+	color: var(--text-normal);
+	box-shadow:
+		0 1px 0 color-mix(in srgb, white 36%, transparent) inset,
+		0 4px 12px color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+}
+
 .hermes-inline-toolbar-button:hover {
-	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-secondary));
+	border-color: color-mix(in srgb, var(--background-modifier-border) 88%, transparent);
+	background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
 	color: var(--text-normal);
 	transform: translateY(-1px);
+	box-shadow:
+		0 1px 0 color-mix(in srgb, white 42%, transparent) inset,
+		0 6px 16px rgba(15, 23, 42, 0.08);
+}
+
+.hermes-inline-toolbar-button.is-selection-send:hover {
+	border-color: color-mix(in srgb, var(--interactive-accent) 44%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 17%, var(--background-primary));
+	box-shadow:
+		0 1px 0 color-mix(in srgb, white 36%, transparent) inset,
+		0 8px 18px color-mix(in srgb, var(--interactive-accent) 12%, transparent);
 }
 
 .hermes-inline-toolbar-button:focus-visible,

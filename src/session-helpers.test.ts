@@ -7,6 +7,7 @@ import {
 	applySessionSnapshot,
 	buildContextHealthItems,
 	buildSessionTitle,
+	findMatchingWriteReviewMessageIndex,
 	formatBridgeConnectionStatus,
 	formatUsageInputTokens,
 	getContextModeDescription,
@@ -32,7 +33,8 @@ import {
 	getRestoredScrollTop,
 	pickNextActiveSessionId,
 	pickSelectionText,
-	shouldStickToBottom
+	shouldStickToBottom,
+	writeReviewContainsRequestId
 } from "./session-helpers.ts";
 
 test("isComposerSendShortcut sends on Shift+Enter or platform submit chords only", () => {
@@ -560,6 +562,45 @@ test("getAppendIndexAfterLatestTurnAssistant keeps review blocks below the lates
 
 	assert.equal(getAppendIndexAfterLatestTurnAssistant(messages, "user-1"), 3);
 	assert.equal(getAppendIndexAfterLatestTurnAssistant(messages, "missing"), undefined);
+});
+
+test("writeReviewContainsRequestId checks nested merged members", () => {
+	assert.equal(
+		writeReviewContainsRequestId(
+			{
+				requestId: "write-review-1",
+				members: [{ requestId: "write-review-2" }]
+			},
+			"write-review-2"
+		),
+		true
+	);
+	assert.equal(writeReviewContainsRequestId({ requestId: "write-review-1" }, "write-review-3"), false);
+});
+
+test("findMatchingWriteReviewMessageIndex prefers the clicked message id when request ids collide", () => {
+	const messages = [
+		{
+			id: "review-message-1",
+			kind: "write-review",
+			writeReview: { requestId: "write-review-1" }
+		},
+		{
+			id: "review-message-2",
+			kind: "write-review",
+			writeReview: {
+				requestId: "write-review-1",
+				members: [{ requestId: "write-review-2" }]
+			}
+		}
+	];
+
+	assert.equal(
+		findMatchingWriteReviewMessageIndex(messages, new Set(["write-review-1", "write-review-2"]), "review-message-2"),
+		1
+	);
+	assert.equal(findMatchingWriteReviewMessageIndex(messages, new Set(["write-review-1"])), 1);
+	assert.equal(findMatchingWriteReviewMessageIndex(messages, new Set(["missing"])), undefined);
 });
 
 test("shouldRestoreComposerFocus only keeps focus when the user is already near the bottom", () => {
