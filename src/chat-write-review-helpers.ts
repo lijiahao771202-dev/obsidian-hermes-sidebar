@@ -123,9 +123,30 @@ export function buildChatWriteAppliedReview(input: ChatWriteAppliedReviewInput):
 		meta: input.meta?.trim() || undefined,
 		filePath: normalizeReviewPath(input.filePath) || input.filePath?.trim() || undefined,
 		diff,
-		snapshots: normalizeChatWriteSnapshots(input.snapshots),
+		snapshots: mergeChatWriteReviewSnapshots(input.snapshots),
 		status: "pending"
 	};
+}
+
+export function mergeChatWriteReviewSnapshots(
+	...groups: Array<ChatWriteSnapshot[] | undefined>
+): ChatWriteSnapshot[] {
+	const result: ChatWriteSnapshot[] = [];
+	const seen = new Set<string>();
+	for (const group of groups) {
+		for (const snapshot of group ?? []) {
+			const path = normalizeReviewPath(snapshot.path);
+			if (!path || seen.has(path)) {
+				continue;
+			}
+			seen.add(path);
+			result.push({
+				path,
+				content: typeof snapshot.content === "string" ? snapshot.content : null
+			});
+		}
+	}
+	return result;
 }
 
 export function buildChatWriteReviewInlinePreview(
@@ -601,6 +622,14 @@ function collectChatWriteReviewDiffFiles(review: ChatWriteReviewRequestLike): Ch
 			};
 			continue;
 		}
+		if (
+			line.startsWith("--- ") &&
+			current &&
+			Object.prototype.hasOwnProperty.call(current, "oldPath") &&
+			Object.prototype.hasOwnProperty.call(current, "newPath")
+		) {
+			finish();
+		}
 		const next = ensureCurrent();
 		next.diffLines.push(line);
 		if (line.startsWith("--- ")) {
@@ -718,20 +747,7 @@ function parseDiffTargetPaths(diff?: string): string[] {
 }
 
 function normalizeChatWriteSnapshots(snapshots?: ChatWriteSnapshot[]): ChatWriteSnapshot[] {
-	const result: ChatWriteSnapshot[] = [];
-	const seen = new Set<string>();
-	for (const snapshot of snapshots ?? []) {
-		const path = normalizeReviewPath(snapshot.path);
-		if (!path || seen.has(path)) {
-			continue;
-		}
-		seen.add(path);
-		result.push({
-			path,
-			content: typeof snapshot.content === "string" ? snapshot.content : null
-		});
-	}
-	return result;
+	return mergeChatWriteReviewSnapshots(snapshots);
 }
 
 function relativizeReviewPathToVault(reviewPath: string, vaultRootPath?: string): string | null {

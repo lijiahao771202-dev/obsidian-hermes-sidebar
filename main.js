@@ -136,6 +136,7 @@ function pickLiveContextForMode(liveContext, mode) {
 function buildContextHealthItems(input) {
   const sessionValue = input.sessionId ? formatSelectionPreview(input.sessionId, 32) : "\u672A\u8FDE\u63A5";
   const cacheValue = input.usage && typeof input.usage.cacheHitRate === "number" ? `${input.usage.cacheHitRate}%${input.usage.apiCalls ? ` \xB7 ${input.usage.apiCalls} calls` : ""}` : "\u7B49\u5F85\u4E0B\u4E00\u6B21\u56DE\u590D";
+  const skillValue = (input.usedSkills ?? []).filter(Boolean).join(" \xB7 ") || "\u672C\u8F6E\u672A\u8C03\u7528";
   const contextParts = [
     input.liveContext.noteTitle,
     input.liveContext.selectionText ? `\u9009\u533A ${input.liveContext.selectionText.trim().length} \u5B57` : "",
@@ -149,6 +150,7 @@ function buildContextHealthItems(input) {
   return [
     { label: "Session", value: sessionValue },
     { label: "Cache", value: cacheValue },
+    { label: "Skills", value: skillValue },
     { label: "Context", value: contextParts.join(" \xB7 ") || "\u65E0\u5B9E\u65F6\u4E0A\u4E0B\u6587" },
     { label: "Pending", value: pendingParts.join(" \xB7 ") || "\u65E0\u5F85\u53D1\u9001\u9644\u4EF6" }
   ];
@@ -401,6 +403,8 @@ var OBSIDIAN_WRITE_GUIDANCE = [
   "- \u5F53\u7528\u6237\u8981\u6C42\u4FEE\u6539\u3001\u91CD\u5199\u3001\u6DA6\u8272\u3001\u4F18\u5316\u3001\u8FFD\u52A0\u3001\u5220\u9664\uFF0C\u6216\u66F4\u6539\u5F53\u524D\u6253\u5F00\u7B14\u8BB0\u3001\u7528\u6237\u9AD8\u4EAE\u9009\u533A\u3001\u5F53\u524D\u7B14\u8BB0\u4E0A\u4E0B\u6587\u3001\u4EFB\u610F vault \u6587\u4EF6\u65F6\uFF0C\u5FC5\u987B\u7528\u6587\u4EF6\u5DE5\u5177\uFF08`patch` \u6216 `write_file`\uFF09\u771F\u6B63\u5199\u5165\u3002",
   "- \u7528\u6237\u8BF4\u201C\u8FD9\u7BC7\u201D\u201C\u5F53\u524D\u7B14\u8BB0\u201D\u201C\u9009\u4E2D\u7684\u6587\u5B57\u201D\u201C\u539F\u6587\u201D\u201C\u6539\u4E00\u4E0B\u201D\u201C\u4F18\u5316\u4E00\u4E0B\u201D\u201C\u6DA6\u8272\u201D\u7B49\uFF0C\u9ED8\u8BA4\u6307 Obsidian \u4E0A\u4E0B\u6587\u91CC\u7684 Current open note \u6216\u9009\u533A\uFF1B\u4F7F\u7528\u5176\u4E2D\u7684\u51C6\u786E\u8DEF\u5F84\u3002",
   "- \u4F18\u5148\u4F7F\u7528 `patch` \u505A\u5C40\u90E8\u7CBE\u51C6\u7F16\u8F91\uFF1B\u53EA\u6709\u6574\u7BC7\u91CD\u5199\u3001\u65B0\u5EFA\u6587\u4EF6\u3001\u6216\u5927\u6BB5\u7ED3\u6784\u91CD\u6392\u65F6\u624D\u4F7F\u7528 `write_file`\u3002",
+  "- \u6D89\u53CA vault \u8BFB\u53D6\u3001\u7B14\u8BB0\u5B9A\u4F4D\u3001Wiki \u94FE\u63A5\u89E3\u6790\u3001\u5C5E\u6027/frontmatter\u3001Canvas\u3001Bases\u3001\u5757\u5F15\u7528\u3001\u9644\u4EF6\u8DEF\u5F84\u3001\u641C\u7D22\u6216\u8DE8\u7B14\u8BB0\u6574\u7406\u65F6\uFF0C\u4F18\u5148\u4F7F\u7528 `obsidian-cli` \u548C Obsidian \u4E13\u5C5E skills \u83B7\u53D6\u771F\u5B9E\u4FE1\u606F\uFF0C\u4E0D\u8981\u7ED5\u8FC7\u5B83\u4EEC\u51ED\u8BB0\u5FC6\u731C\u8DEF\u5F84\u6216\u624B\u5199\u590D\u6742\u8BED\u6CD5\u3002",
+  "- \u9700\u8981\u67E5\u770B Obsidian \u80FD\u529B\u6216\u8BED\u6CD5\u65F6\uFF0C\u4F18\u5148\u67E5\u770B `obsidian-cli`\u3001`obsidian-markdown`\u3001`obsidian-bases`\u3001`obsidian-canvas-creator` \u7B49 Obsidian skills\uFF1B\u53EA\u6709\u8FD9\u4E9B\u80FD\u529B\u4E0D\u9002\u7528\u65F6\uFF0C\u624D\u9000\u56DE\u901A\u7528\u6587\u4EF6\u5DE5\u5177\u3002",
   "- \u5199\u5165\u524D\u53D1\u9001\u4E00\u53E5\u7B80\u77ED\u8FDB\u5C55\uFF0C\u8BA9\u7528\u6237\u77E5\u9053\u4F60\u6B63\u5728\u5904\u7406\u54EA\u4E00\u90E8\u5206\uFF1B\u4E0D\u8981\u8F93\u51FA\u5DE5\u5177\u65E5\u5FD7\u3001\u5185\u90E8\u94FE\u8DEF\u6216\u9690\u85CF\u63A8\u7406\u3002",
   "- \u7528\u6237\u8981\u6C42\u6587\u4EF6\u7F16\u8F91\u65F6\uFF0C\u4E0D\u8981\u5728\u6700\u7EC8\u56DE\u7B54\u91CC\u7C98\u8D34\u5B8C\u6574\u91CD\u5199\u5185\u5BB9\uFF0C\u9664\u975E\u7528\u6237\u660E\u786E\u8981\u6C42\u3002",
   "- \u5199\u5165\u5B8C\u6210\u540E\uFF0C\u6700\u7EC8\u56DE\u7B54\u4FDD\u6301\u7B80\u77ED\uFF1A\u8BF4\u660E\u6539\u4E86\u4EC0\u4E48\u3001\u662F\u5426\u5DF2\u5E94\u7528\u3001\u6709\u6CA1\u6709\u9700\u8981\u7528\u6237\u786E\u8BA4\u7684\u98CE\u9669\u3002",
@@ -419,11 +423,13 @@ var OBSIDIAN_WRITE_GUIDANCE = [
   "- \u94FE\u63A5\u7684\u663E\u793A\u8BCD\u8981\u8D34\u5408\u5F53\u524D\u53E5\u5B50\u7684\u8BED\u4E49\u548C\u8BED\u6C14\uFF0C\u4F18\u5148\u8BA9 `[[wiki]]` \u6210\u4E3A\u53E5\u5B50\u7684\u4E00\u90E8\u5206\uFF0C\u800C\u4E0D\u662F\u751F\u786C\u63D2\u5165\u7684\u6807\u7B7E\u3002",
   "- \u53EA\u6709\u76EE\u6807\u7B14\u8BB0\u5DF2\u5B58\u5728\uFF0C\u6216\u4F60\u4F1A\u5728\u540C\u4E00\u6B21\u4EFB\u52A1\u4E2D\u521B\u5EFA\u5B83\uFF0C\u624D\u6DFB\u52A0\u65B0\u7684 `[[wiki]]`\u3002",
   "- \u5982\u679C\u5F15\u5165\u5168\u65B0\u7684 wiki \u94FE\u63A5\u6982\u5FF5\uFF0C\u5FC5\u987B\u5728\u540C\u4E00\u6B21\u5199\u5165\u6D41\u7A0B\u4E2D\u521B\u5EFA\u5BF9\u5E94 Markdown \u7B14\u8BB0\uFF0C\u8BA9\u5B83\u6210\u4E3A\u53EF\u7EE7\u7EED\u751F\u957F\u7684\u77E5\u8BC6\u79CD\u5B50\uFF0C\u800C\u4E0D\u662F\u7A7A\u58F3\u3002",
+  "- \u5982\u679C\u4F60\u51B3\u5B9A\u65B0\u5EFA\u8FD9\u7BC7 wiki\uFF0C\u81F3\u5C11\u8981\u5199\u51FA\u4E00\u4E2A\u53EF\u7528\u7684\u6700\u5C0F\u6B63\u6587\u9AA8\u67B6\uFF0C\u4E0D\u8981\u53EA\u7559\u6807\u9898\u6216\u4E00\u53E5\u7A7A\u6CDB\u5360\u4F4D\u3002",
   "- \u9047\u5230\u53EF\u80FD\u91CD\u590D\u6216\u8FD1\u4E49\u7684\u6982\u5FF5\uFF0C\u4F18\u5148\u590D\u7528\u5DF2\u6709\u7B14\u8BB0\uFF1B\u4E0D\u8981\u5236\u9020\u540C\u4E49\u91CD\u590D\u7B14\u8BB0\u3002",
+  "- \u51B3\u5B9A\u590D\u7528\u8FD8\u662F\u65B0\u5EFA\u524D\uFF0C\u5148\u7528 `obsidian-cli` \u6216 Obsidian skills \u68C0\u67E5\u771F\u5B9E\u7B14\u8BB0\u6807\u9898\u3001\u522B\u540D\u548C\u8DEF\u5F84\uFF1B\u4E0D\u8981\u628A\u8FD1\u4F3C\u6807\u9898\u8BEF\u5224\u6210\u4E0D\u5B58\u5728\u3002",
   "- \u4E0D\u8981\u7559\u4E0B\u6307\u5411\u672A\u521B\u5EFA\u7B14\u8BB0\u7684\u60AC\u7A7A wiki \u94FE\u63A5\u3002",
   "",
   "Skill \u4F7F\u7528\uFF1A",
-  "- \u6D89\u53CA Obsidian \u6587\u4EF6\u3001Markdown\u3001Wiki\u3001\u5C5E\u6027\u3001callout\u3001embed\u3001Canvas\u3001Bases \u65F6\uFF0C\u4F18\u5148\u67E5\u770B\u76F8\u5173 Obsidian skill\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u786C\u5199\u590D\u6742\u8BED\u6CD5\u3002",
+  "- \u6D89\u53CA Obsidian \u6587\u4EF6\u3001Markdown\u3001Wiki\u3001\u5C5E\u6027\u3001callout\u3001embed\u3001Canvas\u3001Bases \u65F6\uFF0C\u4F18\u5148\u8C03\u7528 `obsidian-cli` \u548C\u76F8\u5173 Obsidian skills\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u786C\u5199\u590D\u6742\u8BED\u6CD5\uFF0C\u4E5F\u4E0D\u8981\u7ED5\u8FC7 vault \u771F\u5B9E\u72B6\u6001\u81EA\u5DF1\u731C\u3002",
   "- \u6D89\u53CA Mermaid \u56FE\u8868\u65F6\uFF0C\u4F18\u5148\u67E5\u770B Mermaid/Obsidian \u56FE\u8868\u76F8\u5173 skill\u3002"
 ].join("\n");
 function normalizeText(text) {
@@ -652,9 +658,27 @@ function buildChatWriteAppliedReview(input) {
     meta: input.meta?.trim() || void 0,
     filePath: normalizeReviewPath(input.filePath) || input.filePath?.trim() || void 0,
     diff,
-    snapshots: normalizeChatWriteSnapshots(input.snapshots),
+    snapshots: mergeChatWriteReviewSnapshots(input.snapshots),
     status: "pending"
   };
+}
+function mergeChatWriteReviewSnapshots(...groups) {
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const group of groups) {
+    for (const snapshot of group ?? []) {
+      const path = normalizeReviewPath(snapshot.path);
+      if (!path || seen.has(path)) {
+        continue;
+      }
+      seen.add(path);
+      result.push({
+        path,
+        content: typeof snapshot.content === "string" ? snapshot.content : null
+      });
+    }
+  }
+  return result;
 }
 function buildChatWriteReviewInlinePreview(review) {
   const filePath = normalizeReviewPath(review.filePath);
@@ -989,6 +1013,9 @@ function collectChatWriteReviewDiffFiles(review) {
       };
       continue;
     }
+    if (line.startsWith("--- ") && current && Object.prototype.hasOwnProperty.call(current, "oldPath") && Object.prototype.hasOwnProperty.call(current, "newPath")) {
+      finish();
+    }
     const next = ensureCurrent();
     next.diffLines.push(line);
     if (line.startsWith("--- ")) {
@@ -1087,22 +1114,6 @@ function parseDiffTargetPaths(diff) {
     targets.push(candidate);
   }
   return targets;
-}
-function normalizeChatWriteSnapshots(snapshots) {
-  const result = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const snapshot of snapshots ?? []) {
-    const path = normalizeReviewPath(snapshot.path);
-    if (!path || seen.has(path)) {
-      continue;
-    }
-    seen.add(path);
-    result.push({
-      path,
-      content: typeof snapshot.content === "string" ? snapshot.content : null
-    });
-  }
-  return result;
 }
 function relativizeReviewPathToVault(reviewPath, vaultRootPath) {
   const normalizedVaultRoot = normalizeReviewPath(vaultRootPath).replace(/\/+$/, "");
@@ -2920,6 +2931,9 @@ function stripCodeBlocks(markdown) {
 function normalizeSlashes(value) {
   return value.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
 }
+function normalizeComparableText(value) {
+  return value.normalize("NFKC").trim().replace(/\.md$/i, "").replace(/\s+/g, " ").toLowerCase();
+}
 function parseWikiLinkTarget(rawTarget) {
   const trimmed = rawTarget.trim();
   if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("^")) {
@@ -2927,8 +2941,10 @@ function parseWikiLinkTarget(rawTarget) {
   }
   const aliasIndex = trimmed.indexOf("|");
   const targetWithSubpath = aliasIndex >= 0 ? trimmed.slice(0, aliasIndex) : trimmed;
+  const alias = aliasIndex >= 0 ? trimmed.slice(aliasIndex + 1).trim() : "";
   const headingIndex = targetWithSubpath.search(/[#^]/);
   const linkpath = normalizeSlashes(headingIndex >= 0 ? targetWithSubpath.slice(0, headingIndex) : targetWithSubpath);
+  const subpath = headingIndex >= 0 ? targetWithSubpath.slice(headingIndex).trim() : "";
   if (!linkpath) {
     return null;
   }
@@ -2939,6 +2955,8 @@ function parseWikiLinkTarget(rawTarget) {
   }
   return {
     linkpath,
+    subpath,
+    alias,
     title
   };
 }
@@ -2960,6 +2978,151 @@ function buildMissingTargetPath(linkpath, sourcePath, pickParentFolder) {
   }
   const parentFolder = normalizeSlashes(pickParentFolder(sourcePath, `${linkpath}.md`) || "");
   return normalizeSlashes(parentFolder ? `${parentFolder}/${linkpath}.md` : `${linkpath}.md`);
+}
+function findUniqueMatch(files, predicate) {
+  const matches = files.filter(predicate);
+  return matches.length === 1 ? matches[0] : null;
+}
+function getComparablePath(value) {
+  return normalizeComparableText(normalizeSlashes(value));
+}
+function getComparableTitle(value) {
+  const normalized = normalizeSlashes(value);
+  const lastSegment = normalized.split("/").pop() ?? normalized;
+  return normalizeComparableText(lastSegment);
+}
+function getComparableAliases(file) {
+  return (file.aliases ?? []).map((alias) => normalizeComparableText(alias)).filter(Boolean);
+}
+function buildResolvedTarget(file, matchedBy) {
+  return {
+    path: normalizeSlashes(file.path),
+    title: file.basename.trim(),
+    matchedBy
+  };
+}
+function shouldTryLooseTitleFallback(linkpath) {
+  return !normalizeSlashes(linkpath).includes("/");
+}
+function resolveExistingWikiLinkTarget(input) {
+  const normalizedLinkpath = normalizeSlashes(String(input.linkpath || ""));
+  if (!normalizedLinkpath) {
+    return null;
+  }
+  const comparablePath = getComparablePath(normalizedLinkpath);
+  const comparableTitle = getComparableTitle(normalizedLinkpath);
+  const strictPathMatch = findUniqueMatch(input.files, (file) => {
+    const filePath = normalizeSlashes(file.path);
+    return comparablePath === getComparablePath(filePath) || comparablePath === getComparablePath(filePath.replace(/\.md$/i, ""));
+  });
+  if (strictPathMatch) {
+    return buildResolvedTarget(strictPathMatch, "path-exact");
+  }
+  if (!shouldTryLooseTitleFallback(normalizedLinkpath)) {
+    return null;
+  }
+  const exactTitleMatch = findUniqueMatch(input.files, (file) => getComparableTitle(file.basename) === comparableTitle);
+  if (exactTitleMatch) {
+    return buildResolvedTarget(exactTitleMatch, "title-exact");
+  }
+  const exactAliasMatch = findUniqueMatch(input.files, (file) => getComparableAliases(file).includes(comparableTitle));
+  if (exactAliasMatch) {
+    return buildResolvedTarget(exactAliasMatch, "alias-exact");
+  }
+  const prefixTitleMatch = findUniqueMatch(input.files, (file) => {
+    const fileTitle = getComparableTitle(file.basename);
+    return fileTitle.length > comparableTitle.length && fileTitle.startsWith(comparableTitle);
+  });
+  if (prefixTitleMatch) {
+    return buildResolvedTarget(prefixTitleMatch, "title-prefix");
+  }
+  const prefixAliasMatch = findUniqueMatch(
+    input.files,
+    (file) => getComparableAliases(file).some((alias) => alias.length > comparableTitle.length && alias.startsWith(comparableTitle))
+  );
+  if (prefixAliasMatch) {
+    return buildResolvedTarget(prefixAliasMatch, "alias-prefix");
+  }
+  return null;
+}
+function collectProtectedRanges(markdown) {
+  const ranges = [];
+  for (const pattern of [CODE_FENCE_PATTERN, INLINE_CODE_PATTERN]) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(markdown)) !== null) {
+      ranges.push({
+        start: match.index,
+        end: match.index + match[0].length
+      });
+    }
+  }
+  ranges.sort((left, right) => left.start - right.start);
+  return ranges;
+}
+function isInsideProtectedRange(index, ranges) {
+  return ranges.some((range) => index >= range.start && index < range.end);
+}
+function buildReplacementWikiTarget(parsed, replacementLinkpath) {
+  const normalizedReplacement = normalizeSlashes(replacementLinkpath).replace(/\.md$/i, "");
+  const targetWithSubpath = `${normalizedReplacement}${parsed.subpath}`;
+  const needsAlias = normalizeComparableText(normalizedReplacement) !== normalizeComparableText(parsed.linkpath);
+  const alias = parsed.alias || (needsAlias ? parsed.title : "");
+  return `[[${targetWithSubpath}${alias ? `|${alias}` : ""}]]`;
+}
+function rewriteWikiLinksToResolvedTargets(input) {
+  const protectedRanges = collectProtectedRanges(String(input.markdown || ""));
+  const rewrites = [];
+  const replacements = [];
+  for (const match of String(input.markdown || "").matchAll(WIKI_LINK_PATTERN)) {
+    if (match[1] || typeof match.index !== "number" || isInsideProtectedRange(match.index, protectedRanges)) {
+      continue;
+    }
+    const parsed = parseWikiLinkTarget(match[2] || "");
+    if (!parsed || looksLikeAttachment(parsed.linkpath)) {
+      continue;
+    }
+    const replacementLinkpath = input.resolveReplacement({
+      linkpath: parsed.linkpath,
+      subpath: parsed.subpath,
+      title: parsed.title,
+      alias: parsed.alias
+    });
+    if (!replacementLinkpath) {
+      continue;
+    }
+    const replacement = buildReplacementWikiTarget(parsed, replacementLinkpath);
+    if (replacement === match[0]) {
+      continue;
+    }
+    replacements.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      value: replacement
+    });
+    rewrites.push({
+      from: match[0],
+      to: replacement
+    });
+  }
+  if (replacements.length === 0) {
+    return {
+      markdown: String(input.markdown || ""),
+      rewrites: []
+    };
+  }
+  let cursor = 0;
+  let markdown = "";
+  for (const replacement of replacements) {
+    markdown += String(input.markdown || "").slice(cursor, replacement.start);
+    markdown += replacement.value;
+    cursor = replacement.end;
+  }
+  markdown += String(input.markdown || "").slice(cursor);
+  return {
+    markdown,
+    rewrites
+  };
 }
 function collectMissingWikiLinkTargets(input) {
   const sanitized = stripCodeBlocks(String(input.markdown || ""));
@@ -3058,6 +3221,8 @@ var DEFAULT_SYSTEM_PROMPT = [
   "- \u5F53\u7528\u6237\u8981\u6C42\u4FEE\u6539\u3001\u91CD\u5199\u3001\u6DA6\u8272\u3001\u4F18\u5316\u3001\u8FFD\u52A0\u3001\u5220\u9664\uFF0C\u6216\u66F4\u6539\u5F53\u524D\u6253\u5F00\u7B14\u8BB0\u3001\u7528\u6237\u9AD8\u4EAE\u9009\u533A\u3001\u5F53\u524D\u7B14\u8BB0\u4E0A\u4E0B\u6587\u3001\u4EFB\u610F vault \u6587\u4EF6\u65F6\uFF0C\u5FC5\u987B\u7528\u6587\u4EF6\u5DE5\u5177\uFF08`patch` \u6216 `write_file`\uFF09\u771F\u6B63\u5199\u5165\u3002",
   "- \u7528\u6237\u8BF4\u201C\u8FD9\u7BC7\u201D\u201C\u5F53\u524D\u7B14\u8BB0\u201D\u201C\u9009\u4E2D\u7684\u6587\u5B57\u201D\u201C\u539F\u6587\u201D\u201C\u6539\u4E00\u4E0B\u201D\u201C\u4F18\u5316\u4E00\u4E0B\u201D\u201C\u6DA6\u8272\u201D\u7B49\uFF0C\u9ED8\u8BA4\u6307 Obsidian \u4E0A\u4E0B\u6587\u91CC\u7684 Current open note \u6216\u9009\u533A\uFF1B\u4F7F\u7528\u5176\u4E2D\u7684\u51C6\u786E\u8DEF\u5F84\u3002",
   "- \u4F18\u5148\u4F7F\u7528 `patch` \u505A\u5C40\u90E8\u7CBE\u51C6\u7F16\u8F91\uFF1B\u53EA\u6709\u6574\u7BC7\u91CD\u5199\u3001\u65B0\u5EFA\u6587\u4EF6\u3001\u6216\u5927\u6BB5\u7ED3\u6784\u91CD\u6392\u65F6\u624D\u4F7F\u7528 `write_file`\u3002",
+  "- \u6D89\u53CA vault \u8BFB\u53D6\u3001\u7B14\u8BB0\u5B9A\u4F4D\u3001Wiki \u94FE\u63A5\u89E3\u6790\u3001\u5C5E\u6027/frontmatter\u3001Canvas\u3001Bases\u3001\u5757\u5F15\u7528\u3001\u9644\u4EF6\u8DEF\u5F84\u3001\u641C\u7D22\u6216\u8DE8\u7B14\u8BB0\u6574\u7406\u65F6\uFF0C\u4F18\u5148\u4F7F\u7528 `obsidian-cli` \u548C Obsidian \u4E13\u5C5E skills \u83B7\u53D6\u771F\u5B9E\u4FE1\u606F\uFF0C\u4E0D\u8981\u7ED5\u8FC7\u5B83\u4EEC\u51ED\u8BB0\u5FC6\u731C\u8DEF\u5F84\u6216\u624B\u5199\u590D\u6742\u8BED\u6CD5\u3002",
+  "- \u9700\u8981\u67E5\u770B Obsidian \u80FD\u529B\u6216\u8BED\u6CD5\u65F6\uFF0C\u4F18\u5148\u67E5\u770B `obsidian-cli`\u3001`obsidian-markdown`\u3001`obsidian-bases`\u3001`obsidian-canvas-creator` \u7B49 Obsidian skills\uFF1B\u53EA\u6709\u8FD9\u4E9B\u80FD\u529B\u4E0D\u9002\u7528\u65F6\uFF0C\u624D\u9000\u56DE\u901A\u7528\u6587\u4EF6\u5DE5\u5177\u3002",
   "- \u5199\u5165\u524D\u53D1\u9001\u4E00\u53E5\u7B80\u77ED\u8FDB\u5C55\uFF0C\u8BA9\u7528\u6237\u77E5\u9053\u4F60\u6B63\u5728\u5904\u7406\u54EA\u4E00\u90E8\u5206\uFF1B\u4E0D\u8981\u8F93\u51FA\u5DE5\u5177\u65E5\u5FD7\u3001\u5185\u90E8\u94FE\u8DEF\u6216\u9690\u85CF\u63A8\u7406\u3002",
   "- \u7528\u6237\u8981\u6C42\u6587\u4EF6\u7F16\u8F91\u65F6\uFF0C\u4E0D\u8981\u5728\u6700\u7EC8\u56DE\u7B54\u91CC\u7C98\u8D34\u5B8C\u6574\u91CD\u5199\u5185\u5BB9\uFF0C\u9664\u975E\u7528\u6237\u660E\u786E\u8981\u6C42\u3002",
   "- \u5199\u5165\u5B8C\u6210\u540E\uFF0C\u6700\u7EC8\u56DE\u7B54\u4FDD\u6301\u7B80\u77ED\uFF1A\u8BF4\u660E\u6539\u4E86\u4EC0\u4E48\u3001\u662F\u5426\u5DF2\u5E94\u7528\u3001\u6709\u6CA1\u6709\u9700\u8981\u7528\u6237\u786E\u8BA4\u7684\u98CE\u9669\u3002",
@@ -3080,7 +3245,7 @@ var DEFAULT_SYSTEM_PROMPT = [
   "- \u4E0D\u8981\u7559\u4E0B\u6307\u5411\u672A\u521B\u5EFA\u7B14\u8BB0\u7684\u60AC\u7A7A wiki \u94FE\u63A5\u3002",
   "",
   "Skill \u4F7F\u7528\uFF1A",
-  "- \u6D89\u53CA Obsidian \u6587\u4EF6\u3001Markdown\u3001Wiki\u3001\u5C5E\u6027\u3001callout\u3001embed\u3001Canvas\u3001Bases \u65F6\uFF0C\u4F18\u5148\u67E5\u770B\u76F8\u5173 Obsidian skill\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u786C\u5199\u590D\u6742\u8BED\u6CD5\u3002",
+  "- \u6D89\u53CA Obsidian \u6587\u4EF6\u3001Markdown\u3001Wiki\u3001\u5C5E\u6027\u3001callout\u3001embed\u3001Canvas\u3001Bases \u65F6\uFF0C\u4F18\u5148\u8C03\u7528 `obsidian-cli` \u548C\u76F8\u5173 Obsidian skills\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u786C\u5199\u590D\u6742\u8BED\u6CD5\uFF0C\u4E5F\u4E0D\u8981\u7ED5\u8FC7 vault \u771F\u5B9E\u72B6\u6001\u81EA\u5DF1\u731C\u3002",
   "- \u6D89\u53CA Mermaid \u56FE\u8868\u65F6\uFF0C\u4F18\u5148\u67E5\u770B Mermaid/Obsidian \u56FE\u8868\u76F8\u5173 skill\u3002"
 ].join("\n");
 var setHermesAppliedInlineWriteReviewEffect = import_state2.StateEffect.define();
@@ -3613,7 +3778,7 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
   }
   async openWikiLinkInSplit(linktext, sourcePath, anchorLeaf) {
     const parsed = (0, import_obsidian2.parseLinktext)(linktext);
-    const targetFile = this.app.metadataCache.getFirstLinkpathDest(parsed.path, sourcePath);
+    const targetFile = this.resolveExistingWikiTargetFile(parsed.path, sourcePath);
     if (!targetFile) {
       new import_obsidian2.Notice(`\u6CA1\u6709\u627E\u5230\u7B14\u8BB0\uFF1A${parsed.path}`);
       return;
@@ -3643,6 +3808,44 @@ var HermesSidebarPlugin = class extends import_obsidian2.Plugin {
       }
     }
     return this.app.workspace.getLeavesOfType("markdown")[0] ?? null;
+  }
+  getWikiResolverFiles() {
+    return this.app.vault.getMarkdownFiles().map((file) => {
+      const cache = this.app.metadataCache.getFileCache(file);
+      return {
+        path: file.path,
+        basename: file.basename,
+        aliases: this.extractFileAliases(cache?.frontmatter)
+      };
+    });
+  }
+  resolveExistingWikiTargetFile(linkpath, sourcePath) {
+    const strict = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
+    if (strict) {
+      return strict;
+    }
+    const fallback = resolveExistingWikiLinkTarget({
+      linkpath,
+      files: this.getWikiResolverFiles()
+    });
+    if (!fallback) {
+      return null;
+    }
+    const target = this.app.vault.getAbstractFileByPath(fallback.path);
+    return target instanceof import_obsidian2.TFile ? target : null;
+  }
+  extractFileAliases(frontmatter) {
+    if (!frontmatter) {
+      return [];
+    }
+    const raw = frontmatter.alias ?? frontmatter.aliases;
+    if (Array.isArray(raw)) {
+      return raw.map((value) => String(value ?? "").trim()).filter(Boolean);
+    }
+    if (typeof raw === "string") {
+      return raw.split(",").map((value) => value.trim()).filter(Boolean);
+    }
+    return [];
   }
   async activateView() {
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_HERMES_SIDEBAR)[0];
@@ -3684,7 +3887,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activeAppliedInlineWriteReview = null;
     this.pendingAppliedInlineWriteFollowFrame = null;
     this.pendingWriteReviewReveal = null;
-    this.pendingWikiAutoCreateReview = null;
     this.pendingWriteReviewMessages = [];
     this.pendingThinkingScrollFrame = null;
     this.pendingThinkingScrollTimeouts = [];
@@ -3725,7 +3927,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.cancelPendingStreamingRender();
     this.clearAppliedInlineWriteReview();
     this.pendingWriteReviewReveal = null;
-    this.pendingWikiAutoCreateReview = null;
     this.expandedActivityMessageIds.clear();
     this.expandedActivityGroupIds.clear();
     this.pendingImages = [];
@@ -4157,7 +4358,8 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       pendingImageCount: this.pendingImages.length,
       queueCount: this.queuedTurns.length,
       liveContext,
-      usage: this.lastUsage
+      usage: this.lastUsage,
+      usedSkills: this.plugin.getActiveSession().usedSkills ?? []
     });
     const inputItem = items.find((item) => item.label === "Input");
     summary.createSpan({
@@ -4849,7 +5051,12 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       interim: true
     });
     this.persistActiveSession(false);
+    const shouldRestoreScroll = !this.shouldAutoStickToBottom && typeof this.lastStableMessagesScrollTop === "number";
     this.render(false);
+    if (shouldRestoreScroll && typeof this.lastStableMessagesScrollTop === "number") {
+      this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+      return;
+    }
     this.scheduleMessagesToBottom();
   }
   appendTurnMessage(session, message) {
@@ -4875,7 +5082,12 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activityBubbleEl = void 0;
     this.activityTimelineEl = void 0;
     this.persistActiveSession(false);
+    const shouldRestoreScroll = !this.shouldAutoStickToBottom && typeof this.lastStableMessagesScrollTop === "number";
     this.render(false);
+    if (shouldRestoreScroll && typeof this.lastStableMessagesScrollTop === "number") {
+      this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+      return target;
+    }
     this.scheduleMessagesToBottom();
     return target;
   }
@@ -4944,6 +5156,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     if (!text) {
       return;
     }
+    this.trackSkillUsage(event);
     const toolName = event.toolName?.trim() || void 0;
     if (!shouldShowActivityEntry(toolName)) {
       return;
@@ -4989,7 +5202,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     if (event.phase !== "applied") {
       return;
     }
-    const review = buildChatWriteAppliedReview({
+    const baseReview = buildChatWriteAppliedReview({
       requestId: event.requestId,
       toolName: event.toolName,
       title: event.title,
@@ -4998,9 +5211,27 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       diff: event.diff,
       snapshots: event.snapshots
     });
-    if (!review) {
+    if (!baseReview) {
       return;
     }
+    const review = {
+      requestId: baseReview.requestId,
+      title: baseReview.title,
+      meta: baseReview.meta,
+      filePath: baseReview.filePath,
+      diff: baseReview.diff,
+      snapshots: baseReview.snapshots,
+      status: baseReview.status
+    };
+    this.queueAppliedWriteReviewMessage(review);
+    void this.showAppliedInlineWriteReview(review);
+    void this.finalizeAppliedWriteReviewWikiLinks(review).then((finalizedReview) => {
+      this.updateAppliedWriteReviewAfterWikiFinalization(finalizedReview);
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.statusText = `Wiki \u94FE\u63A5\u6536\u5C3E\u5931\u8D25\uFF1A${message}`;
+      console.error("Hermes wiki link finalization failed", error);
+    });
     const entry = {
       id: `activity-${Date.now()}-${++this.activityCounter}`,
       text: "\u5DF2\u5E94\u7528\u5199\u5165\uFF0C\u53EF\u5728\u539F\u6587\u4E2D\u5BA1\u9605 Diff",
@@ -5012,18 +5243,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.activityEntries.push(entry);
     this.ensureActivityMessage(entry);
     this.activityEntries = this.activityEntries.slice(-20);
-    const controls = {
-      requestId: review.requestId,
-      title: review.title,
-      meta: review.meta,
-      filePath: review.filePath,
-      diff: review.diff,
-      snapshots: review.snapshots,
-      status: review.status
-    };
-    this.queueAppliedWriteReviewMessage(controls);
     this.statusText = "\u5DF2\u5E94\u7528\u5199\u5165\uFF0C\u53EF\u5728\u539F\u6587\u4E2D\u5BA1\u9605 Diff";
-    void this.showAppliedInlineWriteReview(controls);
   }
   getLatestVisibleActivityText() {
     const entry = [...this.activityEntries].reverse().find((item) => item.toolName !== "run.config" && item.text.trim());
@@ -5090,6 +5310,32 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.persistActiveSession(false);
     this.scheduleMessagesToBottom();
   }
+  trackSkillUsage(event) {
+    const skillName = this.extractSkillNameFromEvent(event);
+    if (!skillName) {
+      return;
+    }
+    const session = this.plugin.getActiveSession();
+    const next = new Set((session.usedSkills ?? []).filter(Boolean));
+    if (next.has(skillName)) {
+      return;
+    }
+    next.add(skillName);
+    session.usedSkills = Array.from(next).slice(-8);
+    this.persistActiveSession(false);
+  }
+  extractSkillNameFromEvent(event) {
+    if (event.skillName?.trim()) {
+      return event.skillName.trim();
+    }
+    const toolName = event.toolName?.trim();
+    if (!toolName || !["skill_view", "skill_manage"].includes(toolName)) {
+      return void 0;
+    }
+    const preview = event.preview?.trim() ?? "";
+    const match = preview.match(/skill=([^\s,]+)/);
+    return match?.[1]?.trim();
+  }
   rerenderActivityMessage(target) {
     if (target.kind !== "activity" || target.role !== "assistant") {
       return false;
@@ -5122,7 +5368,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
   }
   handleInlineWriteTraceEvent(event) {
     if (event.eventType === "write.review.done") {
-      void this.finalizePendingWikiAutoCreate(event.requestId);
       void this.revealPendingWriteReviewTarget(event.requestId, event.filePath);
     }
   }
@@ -5137,22 +5382,6 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.pendingWriteReviewReveal = {
       requestId: review.requestId,
       filePath
-    };
-  }
-  rememberPendingWikiAutoCreateReview(review) {
-    const markdownFiles = this.app.vault.getMarkdownFiles();
-    const filePaths = listChatWriteReviewMarkdownTargets(
-      review,
-      markdownFiles.map((file) => file.path),
-      getVaultBasePath(this.app)
-    );
-    if (filePaths.length === 0) {
-      this.pendingWikiAutoCreateReview = null;
-      return;
-    }
-    this.pendingWikiAutoCreateReview = {
-      requestId: review.requestId,
-      filePaths
     };
   }
   async revealPendingWriteReviewTarget(requestId, eventFilePath) {
@@ -5173,24 +5402,43 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       await new Promise((resolve2) => window.setTimeout(resolve2, 120));
     }
   }
-  async finalizePendingWikiAutoCreate(requestId) {
-    const pending = this.pendingWikiAutoCreateReview;
-    if (!pending) {
-      return;
+  async finalizeAppliedWriteReviewWikiLinks(review) {
+    const markdownFiles = this.app.vault.getMarkdownFiles();
+    const filePaths = listChatWriteReviewMarkdownTargets(
+      review,
+      markdownFiles.map((file) => file.path),
+      getVaultBasePath(this.app)
+    );
+    if (filePaths.length === 0) {
+      return review;
     }
-    if (requestId && pending.requestId !== requestId) {
-      return;
-    }
-    this.pendingWikiAutoCreateReview = null;
     const createdPaths = /* @__PURE__ */ new Set();
-    for (const filePath of pending.filePaths) {
+    const autoCreatedSnapshots = [];
+    for (const filePath of filePaths) {
       const created = await this.ensureWikiLinksExistForFile(filePath, createdPaths);
-      created.forEach((path) => createdPaths.add(path));
+      for (const path of created) {
+        autoCreatedSnapshots.push({ path, content: null });
+      }
     }
-    if (createdPaths.size > 0) {
-      this.statusText = `\u5DF2\u81EA\u52A8\u8865\u5EFA ${createdPaths.size} \u7BC7 Wiki \u6587\u7AE0`;
-      new import_obsidian2.Notice(`Hermes \u5DF2\u81EA\u52A8\u8865\u5EFA ${createdPaths.size} \u7BC7 Wiki \u6587\u7AE0`);
+    if (autoCreatedSnapshots.length > 0) {
+      this.statusText = `\u5DF2\u81EA\u52A8\u8865\u5EFA ${autoCreatedSnapshots.length} \u7BC7 Wiki \u6587\u7AE0`;
+      new import_obsidian2.Notice(`Hermes \u5DF2\u81EA\u52A8\u8865\u5EFA ${autoCreatedSnapshots.length} \u7BC7 Wiki \u6587\u7AE0`);
     }
+    return {
+      ...review,
+      snapshots: mergeChatWriteReviewSnapshots(review.snapshots, autoCreatedSnapshots)
+    };
+  }
+  updateAppliedWriteReviewAfterWikiFinalization(finalizedReview) {
+    const targetRequestIds = this.collectAppliedWriteReviewRequestIds(finalizedReview.requestId, finalizedReview.members);
+    const update = (current) => ({
+      ...current,
+      snapshots: mergeChatWriteReviewSnapshots(current.snapshots, finalizedReview.snapshots)
+    });
+    if (this.updatePendingAppliedWriteReviewByAnyRequestId(targetRequestIds, update, finalizedReview.messageId)) {
+      return;
+    }
+    this.updateAppliedWriteReviewByAnyRequestId(targetRequestIds, update, finalizedReview.messageId);
   }
   async ensureWikiLinksExistForFile(filePath, createdPaths) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
@@ -5199,10 +5447,28 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     }
     const markdownView = this.plugin.getActiveMarkdownView();
     const markdown = markdownView?.file?.path === file.path ? markdownView.getViewData() : await this.app.vault.cachedRead(file);
-    const missingTargets = collectMissingWikiLinkTargets({
+    const rewritten = rewriteWikiLinksToResolvedTargets({
       markdown,
+      resolveReplacement: ({ linkpath }) => {
+        const target = this.plugin.resolveExistingWikiTargetFile(linkpath, file.path);
+        if (!(target instanceof import_obsidian2.TFile)) {
+          return null;
+        }
+        return this.app.metadataCache.fileToLinktext(target, file.path, true);
+      }
+    });
+    if (rewritten.rewrites.length > 0 && rewritten.markdown !== markdown) {
+      if (markdownView?.file?.path === file.path) {
+        markdownView.setViewData(rewritten.markdown, false);
+        await markdownView.requestSave();
+      } else {
+        await this.app.vault.modify(file, rewritten.markdown);
+      }
+    }
+    const missingTargets = collectMissingWikiLinkTargets({
+      markdown: rewritten.markdown,
       sourcePath: file.path,
-      resolveExisting: (linkpath) => Boolean(this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path)),
+      resolveExisting: (linkpath) => Boolean(this.plugin.resolveExistingWikiTargetFile(linkpath, file.path)),
       pickParentFolder: (sourcePath, newFilePath) => this.app.fileManager.getNewFileParent(sourcePath, newFilePath).path
     });
     const created = [];
@@ -5214,6 +5480,7 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
       await this.ensureParentFolderExists(normalizedTargetPath);
       await this.app.vault.create(normalizedTargetPath, this.buildAutoCreatedWikiNote(target.title, file));
       created.push(normalizedTargetPath);
+      createdPaths.add(normalizedTargetPath);
     }
     return created;
   }
@@ -5521,7 +5788,11 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
     this.statusText = "";
     this.setFallbackStatus("Hermes \u5DF2\u6536\u5230\u8FD9\u6761\u6D88\u606F");
     this.render(false);
-    this.scrollMessagesToBottom();
+    if (this.shouldAutoStickToBottom) {
+      this.scrollMessagesToBottom();
+    } else if (typeof this.lastStableMessagesScrollTop === "number") {
+      this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+    }
     let hasFinalized = false;
     try {
       const run = runHermesBridge({
@@ -5581,7 +5852,11 @@ var HermesSidebarView = class extends import_obsidian2.ItemView {
           if (event.type === "segment_break") {
             this.convertActiveStreamToProgress();
             this.setFallbackStatus("Hermes \u6B63\u5728\u7EE7\u7EED\u5904\u7406");
-            this.scrollMessagesToBottom();
+            if (this.shouldAutoStickToBottom) {
+              this.scrollMessagesToBottom();
+            } else if (typeof this.lastStableMessagesScrollTop === "number") {
+              this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+            }
             return;
           }
           if (event.type === "final") {
@@ -5707,10 +5982,15 @@ ${message}`
     if (normalized.length <= 1) {
       return normalized[0] ?? reviews[0];
     }
+    const mergedFiles = normalized.flatMap((review) => summarizeChatWriteReviewFiles(review)).filter(
+      (file, index, source) => source.findIndex(
+        (item) => item.path === file.path && item.kind === file.kind && (item.oldPath ?? "") === (file.oldPath ?? "") && (item.newPath ?? "") === (file.newPath ?? "")
+      ) === index
+    );
     const diffBlocks = normalized.flatMap(
       (review) => splitChatWriteReviewDiffFiles(review).map((file) => file.diff.trim()).filter(Boolean)
     );
-    const filePath = normalized.flatMap((review) => summarizeChatWriteReviewFiles(review).map((file) => file.path)).filter(Boolean).filter((path, index, source) => source.indexOf(path) === index).join(", ");
+    const filePath = mergedFiles.map((file) => file.path).filter(Boolean).filter((path, index, source) => source.indexOf(path) === index).join(", ");
     const snapshots = normalized.flatMap((review) => review.snapshots ?? []).filter((snapshot, index, source) => source.findIndex((item) => item.path === snapshot.path) === index);
     const pendingExists = normalized.some((review) => (review.status ?? "pending") === "pending");
     const hasError = normalized.some((review) => review.status === "error");
@@ -5718,7 +5998,7 @@ ${message}`
     const allAccepted = normalized.every((review) => review.status === "accepted");
     return {
       requestId: normalized[0].requestId,
-      title: normalized.length > 1 ? `\u5DF2\u7F16\u8F91 ${summarizeChatWriteReviewFiles({ filePath, diff: diffBlocks.join("\n\n") }).length} \u4E2A\u6587\u4EF6` : normalized[0]?.title,
+      title: normalized.length > 1 ? `\u5DF2\u7F16\u8F91 ${mergedFiles.length} \u4E2A\u6587\u4EF6` : normalized[0]?.title,
       meta: normalized.length > 1 ? "Diff \u5DF2\u5728\u539F\u6587\u4E2D\u663E\u793A" : normalized[0]?.meta,
       filePath: filePath || normalized[0]?.filePath,
       diff: diffBlocks.join("\n\n"),
@@ -6806,6 +7086,7 @@ function isHermesAbortError(error) {
 function cloneMessages(messages) {
   return messages.map((message) => ({
     ...message,
+    sourcePath: typeof message.sourcePath === "string" ? message.sourcePath : void 0,
     attachments: cloneMessageAttachments(message.attachments),
     activities: cloneActivityEntries(message.activities)
   }));
@@ -6832,6 +7113,7 @@ function createChatSession(seed) {
     createdAt: seed?.createdAt ?? now,
     updatedAt: seed?.updatedAt ?? now,
     sessionId: seed?.sessionId,
+    usedSkills: Array.isArray(seed?.usedSkills) ? seed.usedSkills.filter((skill) => typeof skill === "string" && skill.trim().length > 0) : [],
     messages: cloneMessages(seed?.messages ?? [])
   };
 }
@@ -6846,6 +7128,7 @@ function restoreSessions(input) {
       createdAt: typeof session.createdAt === "number" ? session.createdAt : Date.now(),
       updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : Date.now(),
       sessionId: typeof session.sessionId === "string" ? session.sessionId : void 0,
+      usedSkills: Array.isArray(session.usedSkills) ? session.usedSkills : [],
       messages: Array.isArray(session.messages) ? session.messages.filter(isHermesMessage) : []
     })
   );
@@ -6877,6 +7160,9 @@ function isHermesMessage(value) {
     return false;
   }
   if ("historyContent" in value && value.historyContent !== void 0 && typeof value.historyContent !== "string") {
+    return false;
+  }
+  if ("sourcePath" in value && value.sourcePath !== void 0 && typeof value.sourcePath !== "string") {
     return false;
   }
   if ("activities" in value && value.activities !== void 0 && !Array.isArray(value.activities)) {

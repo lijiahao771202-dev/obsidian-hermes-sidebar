@@ -55,6 +55,8 @@ const OBSIDIAN_WRITE_GUIDANCE = [
 	"- 当用户要求修改、重写、润色、优化、追加、删除，或更改当前打开笔记、用户高亮选区、当前笔记上下文、任意 vault 文件时，必须用文件工具（`patch` 或 `write_file`）真正写入。",
 	"- 用户说“这篇”“当前笔记”“选中的文字”“原文”“改一下”“优化一下”“润色”等，默认指 Obsidian 上下文里的 Current open note 或选区；使用其中的准确路径。",
 	"- 优先使用 `patch` 做局部精准编辑；只有整篇重写、新建文件、或大段结构重排时才使用 `write_file`。",
+	"- 涉及 vault 读取、笔记定位、Wiki 链接解析、属性/frontmatter、Canvas、Bases、块引用、附件路径、搜索或跨笔记整理时，优先使用 `obsidian-cli` 和 Obsidian 专属 skills 获取真实信息，不要绕过它们凭记忆猜路径或手写复杂语法。",
+	"- 需要查看 Obsidian 能力或语法时，优先查看 `obsidian-cli`、`obsidian-markdown`、`obsidian-bases`、`obsidian-canvas-creator` 等 Obsidian skills；只有这些能力不适用时，才退回通用文件工具。",
 	"- 写入前发送一句简短进展，让用户知道你正在处理哪一部分；不要输出工具日志、内部链路或隐藏推理。",
 	"- 用户要求文件编辑时，不要在最终回答里粘贴完整重写内容，除非用户明确要求。",
 	"- 写入完成后，最终回答保持简短：说明改了什么、是否已应用、有没有需要用户确认的风险。",
@@ -73,11 +75,13 @@ const OBSIDIAN_WRITE_GUIDANCE = [
 	"- 链接的显示词要贴合当前句子的语义和语气，优先让 `[[wiki]]` 成为句子的一部分，而不是生硬插入的标签。",
 	"- 只有目标笔记已存在，或你会在同一次任务中创建它，才添加新的 `[[wiki]]`。",
 	"- 如果引入全新的 wiki 链接概念，必须在同一次写入流程中创建对应 Markdown 笔记，让它成为可继续生长的知识种子，而不是空壳。",
+	"- 如果你决定新建这篇 wiki，至少要写出一个可用的最小正文骨架，不要只留标题或一句空泛占位。",
 	"- 遇到可能重复或近义的概念，优先复用已有笔记；不要制造同义重复笔记。",
+	"- 决定复用还是新建前，先用 `obsidian-cli` 或 Obsidian skills 检查真实笔记标题、别名和路径；不要把近似标题误判成不存在。",
 	"- 不要留下指向未创建笔记的悬空 wiki 链接。",
 	"",
 	"Skill 使用：",
-	"- 涉及 Obsidian 文件、Markdown、Wiki、属性、callout、embed、Canvas、Bases 时，优先查看相关 Obsidian skill，不要凭记忆硬写复杂语法。",
+	"- 涉及 Obsidian 文件、Markdown、Wiki、属性、callout、embed、Canvas、Bases 时，优先调用 `obsidian-cli` 和相关 Obsidian skills，不要凭记忆硬写复杂语法，也不要绕过 vault 真实状态自己猜。",
 	"- 涉及 Mermaid 图表时，优先查看 Mermaid/Obsidian 图表相关 skill。"
 ].join("\n");
 

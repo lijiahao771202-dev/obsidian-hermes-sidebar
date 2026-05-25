@@ -14,6 +14,7 @@ import {
 	formatChatWriteReviewLineDisplay,
 	getChatWriteReviewTotalAddedCharacters,
 	listChatWriteReviewMarkdownTargets,
+	mergeChatWriteReviewSnapshots,
 	resolveChatWriteReviewTargetPath,
 	shouldAutoRevealWriteReviewTarget,
 	summarizeChatWriteReviewFiles
@@ -188,6 +189,44 @@ test("summarizeChatWriteReviewFiles merges repeated writes to the same file", ()
 	});
 });
 
+test("summarizeChatWriteReviewFiles keeps separate files when merged write-file reviews concatenate unified diffs", () => {
+	const files = summarizeChatWriteReviewFiles({
+		filePath: "/Users/me/Vault/First.md, /Users/me/Vault/Second.md",
+		diff: [
+			"--- a//Users/me/Vault/First.md",
+			"+++ b//Users/me/Vault/First.md",
+			"@@ -0,0 +1,2 @@",
+			"+# First",
+			"+alpha",
+			"",
+			"--- a//Users/me/Vault/Second.md",
+			"+++ b//Users/me/Vault/Second.md",
+			"@@ -0,0 +1,2 @@",
+			"+# Second",
+			"+beta"
+		].join("\n")
+	});
+
+	assert.deepEqual(files, [
+		{
+			path: "/Users/me/Vault/First.md",
+			kind: "modified",
+			oldPath: "/Users/me/Vault/First.md",
+			newPath: "/Users/me/Vault/First.md",
+			additions: ["# First", "alpha"],
+			removals: []
+		},
+		{
+			path: "/Users/me/Vault/Second.md",
+			kind: "modified",
+			oldPath: "/Users/me/Vault/Second.md",
+			newPath: "/Users/me/Vault/Second.md",
+			additions: ["# Second", "beta"],
+			removals: []
+		}
+	]);
+});
+
 test("formatChatWriteReviewFileLabel prefers note title over long absolute path", () => {
 	assert.deepEqual(formatChatWriteReviewFileLabel("/Users/me/Vault/Folder/My Note.md"), {
 		title: "My Note",
@@ -260,6 +299,25 @@ test("listChatWriteReviewMarkdownTargets includes created markdown files from mu
 	);
 
 	assert.deepEqual(targets, ["Current.md", "Ideas/New Note.md"]);
+});
+
+test("mergeChatWriteReviewSnapshots appends auto-created wiki files without duplicating existing snapshots", () => {
+	assert.deepEqual(
+		mergeChatWriteReviewSnapshots(
+			[
+				{ path: "/Users/me/Vault/Current.md", content: "before" },
+				{ path: "/Users/me/Vault/Current.md", content: "duplicate should be ignored" }
+			],
+			[
+				{ path: "/Users/me/Vault/Ideas/New Note.md", content: null },
+				{ path: "/Users/me/Vault/Ideas/New Note.md", content: "duplicate should be ignored" }
+			]
+		),
+		[
+			{ path: "/Users/me/Vault/Current.md", content: "before" },
+			{ path: "/Users/me/Vault/Ideas/New Note.md", content: null }
+		]
+	);
 });
 
 test("buildChatWriteReviewAdditionMarkdown preserves markdown without diff prefixes", () => {

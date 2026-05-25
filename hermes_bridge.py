@@ -688,10 +688,20 @@ def summarize_tool_args(tool_name: str, args: Any, preview: str) -> str:
         return compact_preview(args)
 
 
+def extract_skill_name(tool_name: str, args: Any) -> str:
+    if tool_name not in {"skill_view", "skill_manage"}:
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    skill_name = args.get("name") or args.get("skill") or args.get("skill_name")
+    return compact_preview(skill_name, max_length=120) if skill_name else ""
+
+
 def emit_activity(
     *,
     event_type: str,
     tool_name: str = "",
+    skill_name: str = "",
     preview: str = "",
     status: str = "info",
     duration: float | None = None,
@@ -706,6 +716,8 @@ def emit_activity(
         "status": status,
         "text": format_tool_status(tool_name, status),
     }
+    if skill_name:
+        payload["skillName"] = skill_name
     if duration is not None:
         payload["duration"] = duration
     if is_error is not None:
@@ -1004,6 +1016,7 @@ def main() -> int:
             emit_activity(
                 event_type=event_type,
                 tool_name=str(tool_name or ""),
+                skill_name=extract_skill_name(str(tool_name or ""), args),
                 preview=preview_text,
                 status="running",
             )
@@ -1013,6 +1026,7 @@ def main() -> int:
             emit_activity(
                 event_type=event_type,
                 tool_name=str(tool_name or ""),
+                skill_name=extract_skill_name(str(tool_name or ""), args),
                 preview=preview_text,
                 status="error" if is_error else "done",
                 duration=metadata.get("duration"),

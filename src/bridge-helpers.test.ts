@@ -259,10 +259,14 @@ test("buildHermesObsidianWriteGuidance forces note edits through file tools", ()
 	assert.match(guidance, /write_file/);
 	assert.match(guidance, /patch/);
 	assert.match(guidance, /必须用文件工具/);
+	assert.match(guidance, /优先使用 `obsidian-cli` 和 Obsidian 专属 skills/);
+	assert.match(guidance, /优先查看 `obsidian-cli`、`obsidian-markdown`、`obsidian-bases`、`obsidian-canvas-creator`/);
 	assert.match(guidance, /不要强行使用 Mermaid/);
 	assert.match(guidance, /能通过 Obsidian Mermaid 语法解析/);
 	assert.match(guidance, /Wiki 链接应该指向可长期沉淀的概念/);
 	assert.match(guidance, /每段优先链接 1-3 个真正有价值的核心概念/);
+	assert.match(guidance, /至少要写出一个可用的最小正文骨架/);
+	assert.match(guidance, /先用 `obsidian-cli` 或 Obsidian skills 检查真实笔记标题、别名和路径/);
 	assert.match(guidance, /不要留下指向未创建笔记的悬空 wiki 链接/);
 	assert.match(guidance, /不要在最终回答里粘贴完整重写内容/);
 	assert.match(guidance, /写入前发送一句简短进展/);

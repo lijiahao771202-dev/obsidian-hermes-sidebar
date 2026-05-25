@@ -44,6 +44,7 @@ export interface ContextHealthInput {
 	queueCount: number;
 	liveContext: LiveContextLike;
 	usage?: BridgeUsageSummaryLike;
+	usedSkills?: string[];
 }
 
 export interface ContextHealthItem {
@@ -287,6 +288,7 @@ export function buildContextHealthItems(input: ContextHealthInput): ContextHealt
 		input.usage && typeof input.usage.cacheHitRate === "number"
 			? `${input.usage.cacheHitRate}%${input.usage.apiCalls ? ` · ${input.usage.apiCalls} calls` : ""}`
 			: "等待下一次回复";
+	const skillValue = (input.usedSkills ?? []).filter(Boolean).join(" · ") || "本轮未调用";
 	const contextParts = [
 		input.liveContext.noteTitle,
 		input.liveContext.selectionText ? `选区 ${input.liveContext.selectionText.trim().length} 字` : "",
@@ -301,6 +303,7 @@ export function buildContextHealthItems(input: ContextHealthInput): ContextHealt
 	return [
 		{ label: "Session", value: sessionValue },
 		{ label: "Cache", value: cacheValue },
+		{ label: "Skills", value: skillValue },
 		{ label: "Context", value: contextParts.join(" · ") || "无实时上下文" },
 		{ label: "Pending", value: pendingParts.join(" · ") || "无待发送附件" }
 	];

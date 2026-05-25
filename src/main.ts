@@ -77,11 +77,11 @@ import {
 	formatChatWriteReviewFileLabel,
 	getChatWriteReviewTotalAddedCharacters,
 	listChatWriteReviewMarkdownTargets,
+	mergeChatWriteReviewSnapshots,
 	resolveChatWriteReviewTargetPath,
 	shouldAutoRevealWriteReviewTarget,
 	splitChatWriteReviewDiffFiles,
 	summarizeChatWriteReviewFiles,
-	type ChatWriteAppliedReview,
 	type ChatWriteReviewDiffFile,
 	type ChatWriteReviewInlinePreview,
 	type ChatWriteReviewDiffSection,
@@ -91,7 +91,12 @@ import {
 } from "./chat-write-review-helpers";
 import { buildSelectionContextWindow } from "./inline-edit-helpers";
 import { InlineEditManager, type InlineEditRunInput } from "./inline-edit";
-import { collectMissingWikiLinkTargets } from "./wiki-link-helpers";
+import {
+	collectMissingWikiLinkTargets,
+	resolveExistingWikiLinkTarget,
+	rewriteWikiLinksToResolvedTargets,
+	type WikiResolverFile
+} from "./wiki-link-helpers";
 
 const VIEW_TYPE_HERMES_SIDEBAR = "hermes-sidebar-view";
 const DEFAULT_HERMES_BINARY = "hermes";
@@ -157,6 +162,8 @@ const DEFAULT_SYSTEM_PROMPT = [
 	"- 当用户要求修改、重写、润色、优化、追加、删除，或更改当前打开笔记、用户高亮选区、当前笔记上下文、任意 vault 文件时，必须用文件工具（`patch` 或 `write_file`）真正写入。",
 	"- 用户说“这篇”“当前笔记”“选中的文字”“原文”“改一下”“优化一下”“润色”等，默认指 Obsidian 上下文里的 Current open note 或选区；使用其中的准确路径。",
 	"- 优先使用 `patch` 做局部精准编辑；只有整篇重写、新建文件、或大段结构重排时才使用 `write_file`。",
+	"- 涉及 vault 读取、笔记定位、Wiki 链接解析、属性/frontmatter、Canvas、Bases、块引用、附件路径、搜索或跨笔记整理时，优先使用 `obsidian-cli` 和 Obsidian 专属 skills 获取真实信息，不要绕过它们凭记忆猜路径或手写复杂语法。",
+	"- 需要查看 Obsidian 能力或语法时，优先查看 `obsidian-cli`、`obsidian-markdown`、`obsidian-bases`、`obsidian-canvas-creator` 等 Obsidian skills；只有这些能力不适用时，才退回通用文件工具。",
 	"- 写入前发送一句简短进展，让用户知道你正在处理哪一部分；不要输出工具日志、内部链路或隐藏推理。",
 	"- 用户要求文件编辑时，不要在最终回答里粘贴完整重写内容，除非用户明确要求。",
 	"- 写入完成后，最终回答保持简短：说明改了什么、是否已应用、有没有需要用户确认的风险。",
@@ -179,7 +186,7 @@ const DEFAULT_SYSTEM_PROMPT = [
 	"- 不要留下指向未创建笔记的悬空 wiki 链接。",
 	"",
 	"Skill 使用：",
-	"- 涉及 Obsidian 文件、Markdown、Wiki、属性、callout、embed、Canvas、Bases 时，优先查看相关 Obsidian skill，不要凭记忆硬写复杂语法。",
+	"- 涉及 Obsidian 文件、Markdown、Wiki、属性、callout、embed、Canvas、Bases 时，优先调用 `obsidian-cli` 和相关 Obsidian skills，不要凭记忆硬写复杂语法，也不要绕过 vault 真实状态自己猜。",
 	"- 涉及 Mermaid 图表时，优先查看 Mermaid/Obsidian 图表相关 skill。"
 ].join("\n");
 
@@ -198,6 +205,7 @@ interface HermesMessage {
 	kind: HermesMessageKind;
 	content: string;
 	historyContent?: string;
+	sourcePath?: string;
 	pending?: boolean;
 	interim?: boolean;
 	attachments?: HermesMessageAttachment[];
@@ -246,6 +254,7 @@ interface HermesChatSession {
 	createdAt: number;
 	updatedAt: number;
 	sessionId?: string;
+	usedSkills?: string[];
 	messages: HermesMessage[];
 }
 
@@ -308,6 +317,7 @@ interface HermesBridgeEvent {
 	usage?: HermesUsageSummary;
 	eventType?: string;
 	toolName?: string;
+	skillName?: string;
 	preview?: string;
 	status?: "running" | "done" | "error" | "info";
 	duration?: number;
@@ -366,11 +376,6 @@ interface HermesWriteReviewRequest {
 interface PendingWriteReviewReveal {
 	requestId: string;
 	filePath: string;
-}
-
-interface PendingWikiAutoCreateReview {
-	requestId: string;
-	filePaths: string[];
 }
 
 interface HermesActivityEntry {
@@ -1044,7 +1049,7 @@ class HermesSidebarPlugin extends Plugin {
 
 	async openWikiLinkInSplit(linktext: string, sourcePath: string, anchorLeaf?: WorkspaceLeaf | null): Promise<void> {
 		const parsed = parseLinktext(linktext);
-		const targetFile = this.app.metadataCache.getFirstLinkpathDest(parsed.path, sourcePath);
+		const targetFile = this.resolveExistingWikiTargetFile(parsed.path, sourcePath);
 		if (!targetFile) {
 			new Notice(`没有找到笔记：${parsed.path}`);
 			return;
@@ -1081,6 +1086,50 @@ class HermesSidebarPlugin extends Plugin {
 		}
 
 		return this.app.workspace.getLeavesOfType("markdown")[0] ?? null;
+	}
+
+	getWikiResolverFiles(): WikiResolverFile[] {
+		return this.app.vault.getMarkdownFiles().map((file) => {
+			const cache = this.app.metadataCache.getFileCache(file);
+			return {
+				path: file.path,
+				basename: file.basename,
+				aliases: this.extractFileAliases(cache?.frontmatter)
+			};
+		});
+	}
+
+	resolveExistingWikiTargetFile(linkpath: string, sourcePath: string): TFile | null {
+		const strict = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
+		if (strict) {
+			return strict;
+		}
+		const fallback = resolveExistingWikiLinkTarget({
+			linkpath,
+			files: this.getWikiResolverFiles()
+		});
+		if (!fallback) {
+			return null;
+		}
+		const target = this.app.vault.getAbstractFileByPath(fallback.path);
+		return target instanceof TFile ? target : null;
+	}
+
+	private extractFileAliases(frontmatter: Record<string, unknown> | null | undefined): string[] {
+		if (!frontmatter) {
+			return [];
+		}
+		const raw = frontmatter.alias ?? frontmatter.aliases;
+		if (Array.isArray(raw)) {
+			return raw.map((value) => String(value ?? "").trim()).filter(Boolean);
+		}
+		if (typeof raw === "string") {
+			return raw
+				.split(",")
+				.map((value) => value.trim())
+				.filter(Boolean);
+		}
+		return [];
 	}
 
 	async activateView(): Promise<HermesSidebarView> {
@@ -1149,7 +1198,6 @@ class HermesSidebarView extends ItemView {
 	private activeAppliedInlineWriteReview: ActiveAppliedInlineWriteReviewState | null = null;
 	private pendingAppliedInlineWriteFollowFrame: number | null = null;
 	private pendingWriteReviewReveal: PendingWriteReviewReveal | null = null;
-	private pendingWikiAutoCreateReview: PendingWikiAutoCreateReview | null = null;
 	private pendingWriteReviewMessages: HermesActivityWriteReviewControls[] = [];
 	private pendingThinkingScrollFrame: number | null = null;
 	private pendingThinkingScrollTimeouts: number[] = [];
@@ -1198,7 +1246,6 @@ class HermesSidebarView extends ItemView {
 		this.cancelPendingStreamingRender();
 		this.clearAppliedInlineWriteReview();
 		this.pendingWriteReviewReveal = null;
-		this.pendingWikiAutoCreateReview = null;
 		this.expandedActivityMessageIds.clear();
 		this.expandedActivityGroupIds.clear();
 		this.pendingImages = [];
@@ -1660,7 +1707,8 @@ class HermesSidebarView extends ItemView {
 			pendingImageCount: this.pendingImages.length,
 			queueCount: this.queuedTurns.length,
 			liveContext,
-			usage: this.lastUsage
+			usage: this.lastUsage,
+			usedSkills: this.plugin.getActiveSession().usedSkills ?? []
 		});
 		const inputItem = items.find((item) => item.label === "Input");
 		summary.createSpan({
@@ -2461,7 +2509,13 @@ class HermesSidebarView extends ItemView {
 			interim: true
 		});
 		this.persistActiveSession(false);
+		const shouldRestoreScroll =
+			!this.shouldAutoStickToBottom && typeof this.lastStableMessagesScrollTop === "number";
 		this.render(false);
+		if (shouldRestoreScroll && typeof this.lastStableMessagesScrollTop === "number") {
+			this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+			return;
+		}
 		this.scheduleMessagesToBottom();
 	}
 
@@ -2489,7 +2543,13 @@ class HermesSidebarView extends ItemView {
 		this.activityBubbleEl = undefined;
 		this.activityTimelineEl = undefined;
 		this.persistActiveSession(false);
+		const shouldRestoreScroll =
+			!this.shouldAutoStickToBottom && typeof this.lastStableMessagesScrollTop === "number";
 		this.render(false);
+		if (shouldRestoreScroll && typeof this.lastStableMessagesScrollTop === "number") {
+			this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+			return target;
+		}
 		this.scheduleMessagesToBottom();
 		return target;
 	}
@@ -2573,6 +2633,7 @@ class HermesSidebarView extends ItemView {
 		if (!text) {
 			return;
 		}
+		this.trackSkillUsage(event);
 
 		const toolName = event.toolName?.trim() || undefined;
 		if (!shouldShowActivityEntry(toolName)) {
@@ -2627,7 +2688,7 @@ class HermesSidebarView extends ItemView {
 		if (event.phase !== "applied") {
 			return;
 		}
-		const review = buildChatWriteAppliedReview({
+		const baseReview = buildChatWriteAppliedReview({
 			requestId: event.requestId,
 			toolName: event.toolName,
 			title: event.title,
@@ -2636,9 +2697,29 @@ class HermesSidebarView extends ItemView {
 			diff: event.diff,
 			snapshots: event.snapshots
 		});
-		if (!review) {
+		if (!baseReview) {
 			return;
 		}
+		const review: HermesActivityWriteReviewControls = {
+			requestId: baseReview.requestId,
+			title: baseReview.title,
+			meta: baseReview.meta,
+			filePath: baseReview.filePath,
+			diff: baseReview.diff,
+			snapshots: baseReview.snapshots,
+			status: baseReview.status
+		};
+		this.queueAppliedWriteReviewMessage(review);
+		void this.showAppliedInlineWriteReview(review);
+		void this.finalizeAppliedWriteReviewWikiLinks(review)
+			.then((finalizedReview) => {
+				this.updateAppliedWriteReviewAfterWikiFinalization(finalizedReview);
+			})
+			.catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				this.statusText = `Wiki 链接收尾失败：${message}`;
+				console.error("Hermes wiki link finalization failed", error);
+			});
 		const entry: HermesActivityEntry = {
 			id: `activity-${Date.now()}-${++this.activityCounter}`,
 			text: "已应用写入，可在原文中审阅 Diff",
@@ -2650,18 +2731,7 @@ class HermesSidebarView extends ItemView {
 		this.activityEntries.push(entry);
 		this.ensureActivityMessage(entry);
 		this.activityEntries = this.activityEntries.slice(-20);
-		const controls: HermesActivityWriteReviewControls = {
-			requestId: review.requestId,
-			title: review.title,
-			meta: review.meta,
-			filePath: review.filePath,
-			diff: review.diff,
-			snapshots: review.snapshots,
-			status: review.status
-		};
-		this.queueAppliedWriteReviewMessage(controls);
 		this.statusText = "已应用写入，可在原文中审阅 Diff";
-		void this.showAppliedInlineWriteReview(controls);
 	}
 
 	private getLatestVisibleActivityText(): string {
@@ -2750,6 +2820,34 @@ class HermesSidebarView extends ItemView {
 		this.scheduleMessagesToBottom();
 	}
 
+	private trackSkillUsage(event: HermesBridgeEvent): void {
+		const skillName = this.extractSkillNameFromEvent(event);
+		if (!skillName) {
+			return;
+		}
+		const session = this.plugin.getActiveSession();
+		const next = new Set((session.usedSkills ?? []).filter(Boolean));
+		if (next.has(skillName)) {
+			return;
+		}
+		next.add(skillName);
+		session.usedSkills = Array.from(next).slice(-8);
+		this.persistActiveSession(false);
+	}
+
+	private extractSkillNameFromEvent(event: HermesBridgeEvent): string | undefined {
+		if (event.skillName?.trim()) {
+			return event.skillName.trim();
+		}
+		const toolName = event.toolName?.trim();
+		if (!toolName || !["skill_view", "skill_manage"].includes(toolName)) {
+			return undefined;
+		}
+		const preview = event.preview?.trim() ?? "";
+		const match = preview.match(/skill=([^\s,]+)/);
+		return match?.[1]?.trim();
+	}
+
 	private rerenderActivityMessage(target: HermesMessage): boolean {
 		if (target.kind !== "activity" || target.role !== "assistant") {
 			return false;
@@ -2787,7 +2885,6 @@ class HermesSidebarView extends ItemView {
 
 	private handleInlineWriteTraceEvent(event: HermesBridgeEvent): void {
 		if (event.eventType === "write.review.done") {
-			void this.finalizePendingWikiAutoCreate(event.requestId);
 			void this.revealPendingWriteReviewTarget(event.requestId, event.filePath);
 		}
 	}
@@ -2803,23 +2900,6 @@ class HermesSidebarView extends ItemView {
 		this.pendingWriteReviewReveal = {
 			requestId: review.requestId,
 			filePath
-		};
-	}
-
-	private rememberPendingWikiAutoCreateReview(review: HermesWriteReviewRequest): void {
-		const markdownFiles = this.app.vault.getMarkdownFiles();
-		const filePaths = listChatWriteReviewMarkdownTargets(
-			review,
-			markdownFiles.map((file) => file.path),
-			getVaultBasePath(this.app)
-		);
-		if (filePaths.length === 0) {
-			this.pendingWikiAutoCreateReview = null;
-			return;
-		}
-		this.pendingWikiAutoCreateReview = {
-			requestId: review.requestId,
-			filePaths
 		};
 	}
 
@@ -2842,24 +2922,47 @@ class HermesSidebarView extends ItemView {
 		}
 	}
 
-	private async finalizePendingWikiAutoCreate(requestId?: string): Promise<void> {
-		const pending = this.pendingWikiAutoCreateReview;
-		if (!pending) {
-			return;
+	private async finalizeAppliedWriteReviewWikiLinks(
+		review: HermesActivityWriteReviewControls
+	): Promise<HermesActivityWriteReviewControls> {
+		const markdownFiles = this.app.vault.getMarkdownFiles();
+		const filePaths = listChatWriteReviewMarkdownTargets(
+			review,
+			markdownFiles.map((file) => file.path),
+			getVaultBasePath(this.app)
+		);
+		if (filePaths.length === 0) {
+			return review;
 		}
-		if (requestId && pending.requestId !== requestId) {
-			return;
-		}
-		this.pendingWikiAutoCreateReview = null;
+
 		const createdPaths = new Set<string>();
-		for (const filePath of pending.filePaths) {
+		const autoCreatedSnapshots: ChatWriteSnapshot[] = [];
+		for (const filePath of filePaths) {
 			const created = await this.ensureWikiLinksExistForFile(filePath, createdPaths);
-			created.forEach((path) => createdPaths.add(path));
+			for (const path of created) {
+				autoCreatedSnapshots.push({ path, content: null });
+			}
 		}
-		if (createdPaths.size > 0) {
-			this.statusText = `已自动补建 ${createdPaths.size} 篇 Wiki 文章`;
-			new Notice(`Hermes 已自动补建 ${createdPaths.size} 篇 Wiki 文章`);
+		if (autoCreatedSnapshots.length > 0) {
+			this.statusText = `已自动补建 ${autoCreatedSnapshots.length} 篇 Wiki 文章`;
+			new Notice(`Hermes 已自动补建 ${autoCreatedSnapshots.length} 篇 Wiki 文章`);
 		}
+		return {
+			...review,
+			snapshots: mergeChatWriteReviewSnapshots(review.snapshots, autoCreatedSnapshots)
+		};
+	}
+
+	private updateAppliedWriteReviewAfterWikiFinalization(finalizedReview: HermesActivityWriteReviewControls): void {
+		const targetRequestIds = this.collectAppliedWriteReviewRequestIds(finalizedReview.requestId, finalizedReview.members);
+		const update = (current: HermesActivityWriteReviewControls): HermesActivityWriteReviewControls => ({
+			...current,
+			snapshots: mergeChatWriteReviewSnapshots(current.snapshots, finalizedReview.snapshots)
+		});
+		if (this.updatePendingAppliedWriteReviewByAnyRequestId(targetRequestIds, update, finalizedReview.messageId)) {
+			return;
+		}
+		this.updateAppliedWriteReviewByAnyRequestId(targetRequestIds, update, finalizedReview.messageId);
 	}
 
 	private async ensureWikiLinksExistForFile(filePath: string, createdPaths: Set<string>): Promise<string[]> {
@@ -2870,10 +2973,28 @@ class HermesSidebarView extends ItemView {
 		const markdownView = this.plugin.getActiveMarkdownView();
 		const markdown =
 			markdownView?.file?.path === file.path ? markdownView.getViewData() : await this.app.vault.cachedRead(file);
-		const missingTargets = collectMissingWikiLinkTargets({
+		const rewritten = rewriteWikiLinksToResolvedTargets({
 			markdown,
+			resolveReplacement: ({ linkpath }) => {
+				const target = this.plugin.resolveExistingWikiTargetFile(linkpath, file.path);
+				if (!(target instanceof TFile)) {
+					return null;
+				}
+				return this.app.metadataCache.fileToLinktext(target, file.path, true);
+			}
+		});
+		if (rewritten.rewrites.length > 0 && rewritten.markdown !== markdown) {
+			if (markdownView?.file?.path === file.path) {
+				markdownView.setViewData(rewritten.markdown, false);
+				await markdownView.requestSave();
+			} else {
+				await this.app.vault.modify(file, rewritten.markdown);
+			}
+		}
+		const missingTargets = collectMissingWikiLinkTargets({
+			markdown: rewritten.markdown,
 			sourcePath: file.path,
-			resolveExisting: (linkpath) => Boolean(this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path)),
+			resolveExisting: (linkpath) => Boolean(this.plugin.resolveExistingWikiTargetFile(linkpath, file.path)),
 			pickParentFolder: (sourcePath, newFilePath) => this.app.fileManager.getNewFileParent(sourcePath, newFilePath).path
 		});
 		const created: string[] = [];
@@ -2885,6 +3006,7 @@ class HermesSidebarView extends ItemView {
 			await this.ensureParentFolderExists(normalizedTargetPath);
 			await this.app.vault.create(normalizedTargetPath, this.buildAutoCreatedWikiNote(target.title, file));
 			created.push(normalizedTargetPath);
+			createdPaths.add(normalizedTargetPath);
 		}
 		return created;
 	}
@@ -3227,7 +3349,11 @@ class HermesSidebarView extends ItemView {
 		this.statusText = "";
 		this.setFallbackStatus("Hermes 已收到这条消息");
 		this.render(false);
-		this.scrollMessagesToBottom();
+		if (this.shouldAutoStickToBottom) {
+			this.scrollMessagesToBottom();
+		} else if (typeof this.lastStableMessagesScrollTop === "number") {
+			this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+		}
 		let hasFinalized = false;
 
 		try {
@@ -3293,7 +3419,11 @@ class HermesSidebarView extends ItemView {
 					if (event.type === "segment_break") {
 						this.convertActiveStreamToProgress();
 						this.setFallbackStatus("Hermes 正在继续处理");
-						this.scrollMessagesToBottom();
+						if (this.shouldAutoStickToBottom) {
+							this.scrollMessagesToBottom();
+						} else if (typeof this.lastStableMessagesScrollTop === "number") {
+							this.restoreMessagesScrollTop(this.lastStableMessagesScrollTop);
+						}
 						return;
 					}
 
@@ -3428,11 +3558,23 @@ class HermesSidebarView extends ItemView {
 			return normalized[0] ?? reviews[0];
 		}
 
+		const mergedFiles = normalized
+			.flatMap((review) => summarizeChatWriteReviewFiles(review))
+			.filter(
+				(file, index, source) =>
+					source.findIndex(
+						(item) =>
+							item.path === file.path &&
+							item.kind === file.kind &&
+							(item.oldPath ?? "") === (file.oldPath ?? "") &&
+							(item.newPath ?? "") === (file.newPath ?? "")
+					) === index
+			);
 		const diffBlocks = normalized.flatMap((review) =>
 			splitChatWriteReviewDiffFiles(review).map((file) => file.diff.trim()).filter(Boolean)
 		);
-		const filePath = normalized
-			.flatMap((review) => summarizeChatWriteReviewFiles(review).map((file) => file.path))
+		const filePath = mergedFiles
+			.map((file) => file.path)
 			.filter(Boolean)
 			.filter((path, index, source) => source.indexOf(path) === index)
 			.join(", ");
@@ -3446,7 +3588,7 @@ class HermesSidebarView extends ItemView {
 
 		return {
 			requestId: normalized[0].requestId,
-			title: normalized.length > 1 ? `已编辑 ${summarizeChatWriteReviewFiles({ filePath, diff: diffBlocks.join("\n\n") }).length} 个文件` : normalized[0]?.title,
+			title: normalized.length > 1 ? `已编辑 ${mergedFiles.length} 个文件` : normalized[0]?.title,
 			meta: normalized.length > 1 ? "Diff 已在原文中显示" : normalized[0]?.meta,
 			filePath: filePath || normalized[0]?.filePath,
 			diff: diffBlocks.join("\n\n"),
@@ -4747,6 +4889,7 @@ function isHermesAbortError(error: unknown): boolean {
 function cloneMessages(messages: HermesMessage[]): HermesMessage[] {
 	return messages.map((message) => ({
 		...message,
+		sourcePath: typeof message.sourcePath === "string" ? message.sourcePath : undefined,
 		attachments: cloneMessageAttachments(message.attachments),
 		activities: cloneActivityEntries(message.activities)
 	}));
@@ -4776,6 +4919,9 @@ function createChatSession(seed?: Partial<HermesChatSession>): HermesChatSession
 		createdAt: seed?.createdAt ?? now,
 		updatedAt: seed?.updatedAt ?? now,
 		sessionId: seed?.sessionId,
+		usedSkills: Array.isArray(seed?.usedSkills)
+			? seed.usedSkills.filter((skill): skill is string => typeof skill === "string" && skill.trim().length > 0)
+			: [],
 		messages: cloneMessages(seed?.messages ?? [])
 	};
 }
@@ -4794,6 +4940,9 @@ function restoreSessions(input?: HermesChatSession[]): HermesChatSession[] {
 				createdAt: typeof session.createdAt === "number" ? session.createdAt : Date.now(),
 				updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : Date.now(),
 				sessionId: typeof session.sessionId === "string" ? session.sessionId : undefined,
+				usedSkills: Array.isArray((session as HermesChatSession).usedSkills)
+					? (session as HermesChatSession).usedSkills
+					: [],
 				messages: Array.isArray(session.messages) ? session.messages.filter(isHermesMessage) : []
 			})
 		);
@@ -4829,6 +4978,9 @@ function isHermesMessage(value: unknown): value is HermesMessage {
 		return false;
 	}
 	if ("historyContent" in value && value.historyContent !== undefined && typeof value.historyContent !== "string") {
+		return false;
+	}
+	if ("sourcePath" in value && value.sourcePath !== undefined && typeof value.sourcePath !== "string") {
 		return false;
 	}
 	if ("activities" in value && value.activities !== undefined && !Array.isArray(value.activities)) {

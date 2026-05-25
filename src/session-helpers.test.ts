@@ -157,11 +157,13 @@ test("buildContextHealthItems summarizes session, cache, and pending context sta
 				apiCalls: 2,
 				inputTokens: 136248,
 				cacheHitRate: 87
-			}
+			},
+			usedSkills: ["obsidian-cli", "ui-ux-pro-max"]
 		}),
 		[
 			{ label: "Session", value: "20260518_123000_abcdef" },
 			{ label: "Cache", value: "87% · 2 calls" },
+			{ label: "Skills", value: "obsidian-cli · ui-ux-pro-max" },
 			{ label: "Context", value: "正念练习 · 选区 9 字 · 附近上下文 15 字" },
 			{ label: "Pending", value: "2 段上下文 · 1 张图片 · 3 条排队" }
 		]
